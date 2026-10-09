@@ -4,6 +4,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import okhttp3.Cookie
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Assume.assumeTrue
 import org.junit.Test
@@ -20,6 +21,13 @@ class SignedUpgradeTest {
         profiles.initialize()
         val url = "https://upgrade-fixture.invalid/".toHttpUrl()
         val title = Title("1", "/watch/movie/1/fixture", "Signed upgrade fixture")
+        if (arguments.getString("phase") == "check") {
+            val service = UpdateService(context)
+            try {
+                runBlocking { service.check() }
+                assertEquals("Published same-key update must download", UpdatePhase.READY, service.state.value.phase)
+            } finally { service.close() }
+        }
         if (arguments.getString("phase") == "seed") {
             val profile = profiles.save(null, "Signed upgrade QA", 2).last()
             profiles.quality(profile.id, 720)
