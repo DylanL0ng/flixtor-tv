@@ -1,0 +1,6 @@
+<!-- TV launcher banners require a 320x180 artwork canvas. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools" tools:ignore="VectorRaster" android:width="320dp" android:height="180dp" android:viewportWidth="320" android:viewportHeight="180">
+    <path android:fillColor="#080C16" android:pathData="M0,0h320v180h-320z" />
+    <path android:fillColor="#76D7E4" android:pathData="M61,52h55v15h-39v15h31v15h-31v30h-16z" />
+    <path android:fillColor="#F4F6FC" android:pathData="M139,53h58v15h-21v59h-16v-59h-21zM207,53h17l18,53l18,-53h17l-27,74h-16z" />
+</vector>

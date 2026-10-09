@@ -1,0 +1,14 @@
+.gradle/
+.idea/
+local.properties
+**/build/
+*.jks
+*.keystore
+*.p12
+.env*
+!.env.example
+.vercel/
+node_modules/
+.impeccable/review/
+release.json
+captures/
