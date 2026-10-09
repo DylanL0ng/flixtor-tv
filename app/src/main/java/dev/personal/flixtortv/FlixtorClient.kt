@@ -20,15 +20,22 @@ import okhttp3.Response
 import org.jsoup.Jsoup
 import org.json.JSONObject
 
-class FlixtorClient(private val sessions: SessionStore) {
+class FlixtorClient internal constructor(private val sessions: SessionStore,
+    private val responseFixture: (suspend (String) -> String)? = null) {
     companion object { const val USER_AGENT = "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" }
     val mediaClient = OkHttpClient.Builder().cookieJar(sessions).connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS).build()
     private val client = mediaClient.newBuilder().followRedirects(false).followSslRedirects(false).build()
     private val bootstrapLock = Mutex()
     @Volatile private var csrf = ""
-    private suspend fun raw(path: String, data: JSONObject? = null, redirects: Int = 0): String = withContext(Dispatchers.IO) {
+    private suspend fun raw(path: String, data: JSONObject? = null, redirects: Int = 0, allowCapacity: Boolean = false): String = withContext(Dispatchers.IO) {
         if (redirects > 5) throw SiteException(Failure.CHANGED)
+        responseFixture?.let { fixture ->
+            SiteParser.safePath(path)
+            val text = fixture(path)
+            SiteParser.responseFailure(text)?.let { if (!(allowCapacity && it == Failure.CAPACITY)) throw SiteException(it) }
+            return@withContext text
+        }
         val url = (SiteParser.BASE + SiteParser.safePath(path)).toHttpUrl()
         val request = Request.Builder().url(url).header("User-Agent", USER_AGENT)
             .header("Referer", SiteParser.BASE + "/home").header("X-Requested-With", "XMLHttpRequest")
@@ -42,10 +49,10 @@ class FlixtorClient(private val sessions: SessionStore) {
                 val next = r.header("Location")?.let { url.resolve(it) } ?: throw SiteException(Failure.CHANGED)
                 if (next.scheme != "https" || next.host != url.host) throw SiteException(Failure.ACCESS)
                 return@withContext raw(next.encodedPath + (next.encodedQuery?.let { "?$it" } ?: ""),
-                    if (r.code == 307 || r.code == 308) data else null, redirects + 1)
+                    if (r.code == 307 || r.code == 308) data else null, redirects + 1, allowCapacity)
             }
             val text = readBoundedBody(r)
-            SiteParser.responseFailure(text, r.code)?.let { throw SiteException(it) }
+            SiteParser.responseFailure(text, r.code)?.let { if (!(allowCapacity && it == Failure.CAPACITY)) throw SiteException(it) }
             return@withContext text
         }
     }
@@ -79,13 +86,13 @@ class FlixtorClient(private val sessions: SessionStore) {
     }
     suspend fun bootstrap() = bootstrapLock.withLock {
         if (csrf.isBlank()) {
-            val html = raw("/home")
+            val html = raw("/home", allowCapacity = true)
             csrf = Jsoup.parse(html).selectFirst("meta[name=csrf-token]")?.attr("content").orEmpty()
             if (csrf.isBlank()) throw SiteException(Failure.ACCESS)
         }
     }
     suspend fun home(): List<Shelf> {
-        bootstrap(); val html = raw("/home")
+        bootstrap(); val html = raw("/home", allowCapacity = true)
         return withContext(Dispatchers.Default) { SiteParser.home(html) }
     }
     suspend fun browse(series: Boolean, page: Int, sort: String): List<Title> {
@@ -106,7 +113,7 @@ class FlixtorClient(private val sessions: SessionStore) {
         return withContext(Dispatchers.Default) { SiteParser.detail(html, title) }
     }
     suspend fun account(): Account {
-        bootstrap(); val html = raw("/home")
+        bootstrap(); val html = raw("/home", allowCapacity = true)
         return withContext(Dispatchers.Default) {
             Jsoup.parse(html).selectFirst("meta[name=csrf-token]")?.attr("content")?.takeIf { it.isNotBlank() }?.let { csrf = it }
             SiteParser.account(html)
@@ -138,5 +145,12 @@ class FlixtorClient(private val sessions: SessionStore) {
         return SiteParser.stream(raw(path))
     }
     fun clearSession() { csrf = ""; sessions.clear() }
-    fun close() { mediaClient.dispatcher.cancelAll(); mediaClient.connectionPool.evictAll() }
+    fun close() { mediaClient.closeAsync() }
+}
+
+// TLS shutdown can write to a socket. Activity/ViewModel cleanup runs on the main thread.
+internal fun OkHttpClient.closeAsync() {
+    val client = this
+    Thread({ client.dispatcher.cancelAll(); client.connectionPool.evictAll() }, "flixtor-http-close")
+        .apply { isDaemon = true }.start()
 }

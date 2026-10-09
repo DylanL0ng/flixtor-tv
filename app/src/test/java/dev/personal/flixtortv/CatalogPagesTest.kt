@@ -20,6 +20,7 @@ class CatalogPagesTest {
             assertEquals("First", all.first().name)
             assertEquals("m:0", (all as CatalogPages.Snapshot).key(0))
             assertEquals(361, pages.append(listOf(all.first())).size)
+            assertSame(all, pages.append(emptyList()))
             pages.warm(0)
             assertEquals("Title 360", all.last().name)
         } finally { pages.close(); root.deleteRecursively() }

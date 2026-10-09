@@ -15,6 +15,8 @@ object SiteParser {
             listOf("error", "message", "reason", "status").map { obj.optString(it) }.joinToString(" ").lowercase()
         }.getOrElse {
             val doc = Jsoup.parse(raw)
+            val content = doc.selectFirst("#content")?.text()?.lowercase().orEmpty()
+            if (status in 200..299 && "all our servers are full" in content && "cannot accept additional users" in content) return Failure.CAPACITY
             // Catalogue and watch pages contain VIP marketing and sign-in navigation.
             // Only classify an error document, never those normal page elements.
             if (status in 200..299 && doc.select(".cflip, meta[property=og:type]").isNotEmpty()) return null
@@ -22,9 +24,11 @@ object SiteParser {
         }
         return when {
             status == 429 || status >= 500 -> Failure.UNAVAILABLE
+            "all our servers are full" in message && "cannot accept additional users" in message -> Failure.CAPACITY
             "account is blocked" in message || "account blocked" in message -> Failure.BLOCKED
             "session expired" in message || "login expired" in message -> Failure.EXPIRED
-            status == 401 || "please sign in" in message || "please log in" in message ||
+            status == 401 || "please sign in" in message || "please log in" in message || "please login" in message ||
+                "you must be logged in" in message || "sign in to watch" in message || "log in to watch" in message ||
                 "login required" in message || "not logged in" in message || "<title>sign in" in text -> Failure.SIGNED_OUT
             status == 443 || "vip required" in message || "vip only" in message ||
                 "only available to vip" in message || "only available for vip" in message ||

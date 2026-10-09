@@ -29,6 +29,8 @@ class UpdateValidationTest {
         val wrongSigner = candidate("wrong-signer.apk")
         try {
             service.validate(correct.first, correct.second)
+            try { service.validate(wrongSigner.first, wrongSigner.second); fail("Expected signing-key rejection") }
+            catch (_: UpdateSignerException) { }
             for ((file, metadata) in listOf(correct.first to correct.second.copy(sha256 = "0".repeat(64)),
                 correct.first to correct.second.copy(versionCode = 1), wrongSigner)) {
                 try { service.validate(file, metadata); fail("Expected invalid APK rejection") } catch (_: IllegalStateException) { }

@@ -5,6 +5,16 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class SiteParserTest {
+    @Test fun fullGuestServersAreNotAStructuralFailure() {
+        // Sanitized shape observed on the live service; omit navigation, tokens and scripts.
+        val html = """<meta name="csrf-token" content="fixture"><div id="content">
+            <div>...all our servers are full right now.</div>
+            <div>Except for VIPs, we cannot accept additional users at the moment.</div></div>"""
+        assertEquals(Failure.CAPACITY, SiteParser.responseFailure(html))
+        assertEquals(AccountStatus.GUEST, SiteParser.account(html).status)
+        try { SiteParser.home(html); fail("Expected capacity outcome") }
+        catch (error: SiteException) { assertEquals(Failure.CAPACITY, error.failure) }
+    }
     private val card = """
         <div class="cflip" data-href="/watch/movie/123/example">
           <div class="front"><img src="https://example.org/poster.jpg" alt="Example">

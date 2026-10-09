@@ -24,6 +24,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
@@ -101,12 +102,13 @@ class MainActivity : ComponentActivity() {
     val updateState by vm.updates.state.collectAsStateWithLifecycle()
     val lifecycleState by owner.lifecycle.currentStateFlow.collectAsState()
     var attemptedVersion by remember { mutableStateOf("") }
+    var showUpdatePrompt by remember { mutableStateOf(false) }
     LaunchedEffect(updateState.phase, state.screen, lifecycleState) {
         if (updateState.phase == UpdatePhase.READY && state.screen != Screen.PLAYER &&
-            lifecycleState == Lifecycle.State.RESUMED && attemptedVersion != updateState.version &&
-            context.packageManager.canRequestPackageInstalls()) {
+            lifecycleState == Lifecycle.State.RESUMED && attemptedVersion != updateState.version) {
             attemptedVersion = updateState.version
-            (context as? MainActivity)?.installUpdate()
+            if (context.packageManager.canRequestPackageInstalls()) (context as? MainActivity)?.installUpdate()
+            else showUpdatePrompt = true
         }
     }
     val images = remember {
@@ -117,6 +119,13 @@ class MainActivity : ComponentActivity() {
     DisposableEffect(images) { onDispose { images.shutdown() } }
     val saveable = key(state.profile?.id) { rememberSaveableStateHolder() }
     var fitting by remember { mutableStateOf(false) }
+    var returnFromFit by remember { mutableStateOf(false) }
+    val fitFocus = remember { FocusRequester() }
+    LaunchedEffect(fitting) {
+        if (!fitting && returnFromFit && state.screen == Screen.ACCOUNT) {
+            fitFocus.requestFocus(); returnFromFit = false
+        }
+    }
     BoxWithConstraints(Modifier.fillMaxSize().background(Midnight)) {
         val safe = PaddingValues(horizontal = maxWidth * (state.screenFit.horizontal / 100f),
             vertical = maxHeight * (state.screenFit.vertical / 100f))
@@ -129,10 +138,14 @@ class MainActivity : ComponentActivity() {
             AsyncImage(backdrop, null, imageLoader = images, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
             Box(Modifier.fillMaxSize().background(Midnight.copy(alpha = 0.88f)))
         }
-        CompositionLocalProvider(LocalSafePadding provides safe) {
+        if (!fitting) CompositionLocalProvider(LocalSafePadding provides safe) {
         Column(Modifier.fillMaxSize().then(if (state.screen == Screen.PLAYER) Modifier else Modifier.padding(safe))) {
-        if (state.screen !in listOf(Screen.PROFILES, Screen.PLAYER, Screen.DETAIL)) Navigation(state, state.focusedKey == null, vm::navigate)
+        if (state.screen !in listOf(Screen.PROFILES, Screen.PLAYER, Screen.DETAIL)) Navigation(state, state.focusedKey == null && !returnFromFit, vm::navigate)
         if (state.failure == Failure.CHANGED && state.screen != Screen.PLAYER) StructuralRecovery(vm)
+        if (state.failure in listOf(Failure.CAPACITY, Failure.VIP, Failure.SIGNED_OUT, Failure.EXPIRED) &&
+            state.screen !in listOf(Screen.PLAYER, Screen.ACCOUNT)) {
+            Action(stringResource(if (state.account.signedIn) R.string.check_account else R.string.sign_in)) { vm.navigate(Screen.ACCOUNT) }
+        }
         saveable.SaveableStateProvider(state.screen.name) {
             when (state.screen) {
                 Screen.PROFILES -> ProfilesScreen(state, vm)
@@ -144,7 +157,7 @@ class MainActivity : ComponentActivity() {
                         state.failure?.let { if (it == Failure.VIP) AccessMessage(state.account) else FailureMessage(it, vm::refresh) }
                         Action(stringResource(R.string.back)) { vm.back() }
                         if (state.failure == Failure.CHANGED) StructuralRecovery(vm)
-                        if (state.failure in listOf(Failure.VIP, Failure.EXPIRED, Failure.SIGNED_OUT)) {
+                        if (state.failure in listOf(Failure.VIP, Failure.EXPIRED, Failure.SIGNED_OUT, Failure.CAPACITY)) {
                             Action(stringResource(R.string.sign_in)) { vm.signInForPlayback() }
                         }
                     }
@@ -153,13 +166,21 @@ class MainActivity : ComponentActivity() {
                 Screen.MOVIES, Screen.SHOWS -> Browse(state, images, vm)
                 Screen.SEARCH -> Search(state, images, vm)
                 Screen.LIST -> Library(state, images, vm)
-                Screen.ACCOUNT -> AccountScreen(state, vm) { fitting = true }
+                Screen.ACCOUNT -> AccountScreen(state, vm, fitFocus) { fitting = true }
                 Screen.DETAIL -> DetailScreen(state, images, vm)
             }
         }
         }
         }
-        if (fitting) ScreenFitEditor(state.screenFit, vm::setScreenFit) { fitting = false }
+        if (showUpdatePrompt && updateState.phase == UpdatePhase.READY && state.screen != Screen.PLAYER) {
+            CompositionLocalProvider(LocalSafePadding provides safe) {
+            UpdateReadyDialog(updateState.version, { showUpdatePrompt = false }) {
+                showUpdatePrompt = false
+                (context as? MainActivity)?.installUpdate()
+            }
+            }
+        }
+        if (fitting) ScreenFitEditor(state.screenFit, vm::setScreenFit) { returnFromFit = true; fitting = false }
     }
 }
 
@@ -285,9 +306,11 @@ class MainActivity : ComponentActivity() {
 
 @Composable private fun Results(s: TvState, images: ImageLoader, vm: TvViewModel, modifier: Modifier, more: () -> Unit) {
     val grid = rememberLazyGridState()
+    var gridKey by rememberSaveable { mutableStateOf(s.catalogKey) }
     val requestMore by rememberUpdatedState(more)
     val latest by rememberUpdatedState(s)
     LaunchedEffect(grid, s.catalogKey) {
+        if (gridKey != s.catalogKey) { gridKey = s.catalogKey; grid.scrollToItem(0) }
         snapshotFlow { grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1 }.distinctUntilChanged().collect { last ->
             vm.warmCatalog(grid.firstVisibleItemIndex)
             val current = latest
@@ -314,9 +337,14 @@ class MainActivity : ComponentActivity() {
             }
         }
         if (s.appending) Loading()
-        if (s.appendFailure != null) Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(stringResource(R.string.pagination_failed), color = Muted, modifier = Modifier.weight(1f))
-            Action(stringResource(R.string.retry), click = more)
+        if (s.appendFailure != null) {
+            if (s.appendFailure in listOf(Failure.CAPACITY, Failure.VIP, Failure.SIGNED_OUT, Failure.EXPIRED, Failure.ACCESS)) {
+                FailureMessage(s.appendFailure, more)
+                if (s.appendFailure != Failure.ACCESS) Action(stringResource(R.string.sign_in)) { vm.navigate(Screen.ACCOUNT) }
+            } else Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(stringResource(R.string.pagination_failed), color = Muted, modifier = Modifier.weight(1f))
+                Action(stringResource(R.string.retry), click = more)
+            }
         }
     }
 }
@@ -377,11 +405,12 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@Composable private fun AccountScreen(s: TvState, vm: TvViewModel, fit: () -> Unit) {
+@Composable private fun AccountScreen(s: TvState, vm: TvViewModel, fitFocus: FocusRequester, fit: () -> Unit) {
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var passwordLogin by remember { mutableStateOf(false) }
     var confirmClear by remember { mutableStateOf(false) }
-    LaunchedEffect(s.account.signedIn) { if (s.account.signedIn) { email = ""; password = "" } }
+    LaunchedEffect(s.account.signedIn) { if (s.account.signedIn) { email = ""; password = ""; passwordLogin = false } }
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 8.dp), contentPadding = PaddingValues(bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         item {
             Text(stringResource(R.string.settings), fontSize = 30.sp, fontWeight = FontWeight.SemiBold)
@@ -401,19 +430,21 @@ class MainActivity : ComponentActivity() {
                 else {
                     if (s.pairing) Action(stringResource(R.string.cancel_pair)) { vm.stopPairing() }
                     else Action(stringResource(R.string.pair_phone), enabled = !s.loading) { vm.startPairing() }
+                    if (!s.pairing && !passwordLogin) Action(stringResource(R.string.sign_in_password), enabled = !s.loading) { passwordLogin = true }
                     val pair = s.pair
                     if (pair != null) PairingView(pair)
                     else if (s.pairing) Loading()
                 }
             }
         }
-        if (!s.account.signedIn && !s.pairing) item {
+        if (!s.account.signedIn && !s.pairing && passwordLogin) item {
             Column(Modifier.widthIn(max = 480.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Field(stringResource(R.string.email), email, { email = it.take(254) }, keyboard = KeyboardType.Email)
                 Field(stringResource(R.string.password), password, { password = it.take(64) }, password = true)
                 Action(stringResource(R.string.sign_in), enabled = !s.loading && android.util.Patterns.EMAIL_ADDRESS.matcher(email.trim()).matches() && password.length in 8..64) {
                     vm.login(email, password); password = ""
                 }
+                Action(stringResource(R.string.cancel)) { passwordLogin = false; password = "" }
             }
         }
         item {
@@ -423,7 +454,7 @@ class MainActivity : ComponentActivity() {
         item { UpdateSettings(vm) }
         item {
             Text(stringResource(R.string.display), fontSize = 24.sp)
-            Action(stringResource(R.string.screen_fit), click = fit)
+            Action(stringResource(R.string.screen_fit), Modifier.focusRequester(fitFocus), click = fit)
         }
         item {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -496,7 +527,7 @@ class MainActivity : ComponentActivity() {
         Failure.VIP -> R.string.error_vip; Failure.EXPIRED -> R.string.error_expired; Failure.BLOCKED -> R.string.error_blocked;
         Failure.MEDIA -> R.string.error_media; Failure.CHANGED -> R.string.error_changed;
         Failure.SIGNED_OUT -> R.string.error_signed_out; Failure.UNAVAILABLE -> R.string.error_unavailable;
-        Failure.UNSUPPORTED -> R.string.error_unsupported }
+        Failure.UNSUPPORTED -> R.string.error_unsupported; Failure.CAPACITY -> R.string.error_capacity }
     Row(horizontalArrangement = Arrangement.spacedBy(20.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(stringResource(text), color = Color(0xFFFFB4AB), modifier = Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite })
         Action(stringResource(R.string.retry), modifier = modifier, click = retry)

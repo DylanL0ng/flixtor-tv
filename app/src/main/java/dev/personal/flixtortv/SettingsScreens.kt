@@ -26,8 +26,26 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
+
+@Composable internal fun UpdateReadyDialog(version: String, dismiss: () -> Unit, install: () -> Unit) {
+    val installFocus = remember { FocusRequester() }
+    Dialog(onDismissRequest = dismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        LazyColumn(Modifier.padding(LocalSafePadding.current).widthIn(max = 520.dp)
+            .background(Panel, RoundedCornerShape(16.dp)).padding(28.dp),
+            verticalArrangement = Arrangement.spacedBy(20.dp)) {
+            item { Text(stringResource(R.string.update_available_title, version), fontSize = 24.sp) }
+            item { Text(stringResource(R.string.update_ready), color = Muted) }
+            item { Row(Modifier.padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                Action(stringResource(R.string.install_update), Modifier.focusRequester(installFocus), click = install)
+                Action(stringResource(R.string.update_later), click = dismiss)
+            } }
+        }
+        LaunchedEffect(Unit) { installFocus.requestFocus() }
+    }
+}
 
 @Composable internal fun ProfileAvatar(avatar: Int, modifier: Modifier = Modifier) {
     val colors = listOf(Color(0xFF6DCAED), Color(0xFFA898F4), Color(0xFFFFAD98), Color(0xFF76D8B9),
@@ -100,7 +118,7 @@ import androidx.tv.material3.Text
     }
     deleting?.let { profile ->
         val cancelFocus = remember { FocusRequester() }
-        Dialog(onDismissRequest = { deleting = null }) {
+        Dialog(onDismissRequest = { deleting = null }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
             Column(Modifier.padding(LocalSafePadding.current).widthIn(max = 520.dp).background(Panel, RoundedCornerShape(16.dp)).padding(28.dp),
                 verticalArrangement = Arrangement.spacedBy(20.dp)) {
                 Text(stringResource(R.string.delete_profile_title, profile.name), fontSize = 24.sp)
@@ -117,7 +135,7 @@ import androidx.tv.material3.Text
 
 @Composable internal fun QualityOptions(quality: Int, select: (Int) -> Unit, vertical: Boolean = false) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(stringResource(R.string.quality_help), color = Muted)
+        if (!vertical) Text(stringResource(R.string.quality_help), color = Muted)
         if (vertical) {
             listOf(0, 720, 1080, 2160).forEach { height ->
                 val label = if (height == 0) stringResource(R.string.auto_quality) else stringResource(R.string.up_to_resolution, height)
@@ -146,6 +164,7 @@ import androidx.tv.material3.Text
             UpdatePhase.FAILED -> R.string.update_unavailable
             UpdatePhase.INSTALLING -> R.string.update_installing
             UpdatePhase.INCOMPATIBLE -> R.string.update_incompatible
+            UpdatePhase.SIGNER_MISMATCH -> R.string.update_signer_mismatch
         }
         Text(stringResource(message), color = Muted, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
         if (state.installationFailed) Text(stringResource(R.string.update_install_failed), color = Muted)

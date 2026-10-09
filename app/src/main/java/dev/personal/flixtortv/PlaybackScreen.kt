@@ -25,6 +25,8 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
@@ -63,6 +65,7 @@ import kotlinx.coroutines.delay
     var controls by remember(stream) { mutableStateOf(true) }
     var settings by remember(stream) { mutableStateOf(false) }
     var playing by remember(stream) { mutableStateOf(false) }
+    var playRequested by remember(stream) { mutableStateOf(false) }
     var tracks by remember(stream) { mutableStateOf(Tracks.EMPTY) }
     var cues by remember(stream) { mutableStateOf<List<Cue>>(emptyList()) }
     var position by remember(stream) { mutableLongStateOf(state.resumePosition) }
@@ -75,6 +78,8 @@ import kotlinx.coroutines.delay
     var preview by remember(stream) { mutableStateOf<Long?>(null) }
     var timelineFocused by remember(stream) { mutableStateOf(false) }
     val safe = LocalSafePadding.current
+    val density = LocalDensity.current
+    var controlsHeight by remember(stream) { mutableStateOf(150.dp) }
     val player = remember(stream) {
         val http = OkHttpDataSource.Factory(vm.client.mediaClient).setUserAgent(FlixtorClient.USER_AGENT)
             .setDefaultRequestProperties(mapOf("Referer" to SiteParser.BASE + "/"))
@@ -97,6 +102,7 @@ import kotlinx.coroutines.delay
             .setForceHighestSupportedBitrate(false).build()
     }
     DisposableEffect(player) {
+        playRequested = player.playWhenReady
         val listener = object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
                 val http = generateSequence(error.cause) { it.cause }.filterIsInstance<HttpDataSource.InvalidResponseCodeException>().firstOrNull()
@@ -112,6 +118,7 @@ import kotlinx.coroutines.delay
             }
             override fun onPlaybackStateChanged(value: Int) { buffering = value == Player.STATE_BUFFERING }
             override fun onIsPlayingChanged(value: Boolean) { playing = value }
+            override fun onPlayWhenReadyChanged(value: Boolean, reason: Int) { playRequested = value }
             override fun onTracksChanged(value: Tracks) { tracks = value }
             override fun onCues(value: CueGroup) { cues = value.cues }
         }
@@ -142,18 +149,26 @@ import kotlinx.coroutines.delay
     LaunchedEffect(controls, settings, interaction, failure, playing, preview) {
         if (controls && !settings && preview == null && failure == null && playing) { delay(6000); controls = false }
     }
-    LaunchedEffect(controls, settings, failure) {
-        when { settings -> drawerFocus.requestFocus(); controls -> playFocus.requestFocus(); else -> rootFocus.requestFocus() }
-    }
     var returnToSettings by remember { mutableStateOf(false) }
-    LaunchedEffect(settings) {
-        if (!settings && returnToSettings && controls) { settingsFocus.requestFocus(); returnToSettings = false }
+    fun closeOverlay() {
+        when {
+            settings -> { settings = false; preview = null; returnToSettings = true }
+            preview != null -> preview = null
+            else -> controls = false
+        }
     }
-    BackHandler(preview != null || settings || controls) {
-        when { preview != null -> preview = null; settings -> { settings = false; returnToSettings = true }; else -> controls = false }
+    LaunchedEffect(controls, settings, failure) {
+        when {
+            settings -> drawerFocus.requestFocus()
+            controls && returnToSettings -> { settingsFocus.requestFocus(); returnToSettings = false }
+            controls -> playFocus.requestFocus()
+            else -> rootFocus.requestFocus()
+        }
     }
+    BackHandler(preview != null || settings || controls) { closeOverlay() }
     val view = remember(player) { PlayerView(context).apply {
         this.player = player; useController = false; isFocusable = false
+        descendantFocusability = android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS
         subtitleView?.visibility = android.view.View.GONE
     } }
     DisposableEffect(view) { onDispose { view.player = null } }
@@ -162,6 +177,10 @@ import kotlinx.coroutines.delay
         if (key.action != KeyEvent.ACTION_DOWN) return@onPreviewKeyEvent false
         interaction++
         when (key.keyCode) {
+            KeyEvent.KEYCODE_BACK -> {
+                if (preview != null || settings || controls) closeOverlay() else vm.back()
+                true
+            }
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> { if (player.playWhenReady) player.pause() else player.play(); true }
             KeyEvent.KEYCODE_MEDIA_PLAY -> { player.play(); true }
             KeyEvent.KEYCODE_MEDIA_PAUSE -> { player.pause(); true }
@@ -175,7 +194,9 @@ import kotlinx.coroutines.delay
         AndroidView(factory = { view }, modifier = Modifier.fillMaxSize())
         if (controls && !settings) {
             Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
-                .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.88f))))
+                .onSizeChanged { controlsHeight = with(density) { it.height.toDp() } }
+                .background(Brush.verticalGradient(0f to Color.Transparent,
+                    0.28f to Color.Black.copy(alpha = 0.64f), 1f to Color.Black.copy(alpha = 0.92f)))
                 .padding(safe).padding(top = 32.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(state.detail?.title?.name.orEmpty(), fontSize = 21.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -200,8 +221,10 @@ import kotlinx.coroutines.delay
                         contentDescription = timelineLabel; progressBarRangeInfo = ProgressBarRangeInfo(fraction, 0f..1f)
                     }) {
                     val y = size.height / 2
+                    drawLine(Color.Black.copy(alpha = 0.7f), Offset(0f, y), Offset(size.width, y), 8.dp.toPx())
                     drawLine(Color.White.copy(alpha = 0.35f), Offset(0f, y), Offset(size.width, y), if (timelineFocused) 6.dp.toPx() else 3.dp.toPx())
                     drawLine(if (timelineFocused) Accent else Color.White, Offset(0f, y), Offset(size.width * fraction, y), if (timelineFocused) 6.dp.toPx() else 3.dp.toPx())
+                    if (timelineFocused) drawCircle(Midnight, 10.dp.toPx(), Offset(size.width * fraction, y))
                     drawCircle(if (timelineFocused) Accent else Color.White, if (timelineFocused) 7.dp.toPx() else 4.dp.toPx(), Offset(size.width * fraction, y))
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -210,7 +233,7 @@ import kotlinx.coroutines.delay
                         else stringResource(R.string.time_remaining, clock((duration - position).coerceAtLeast(0))), fontSize = 13.sp, color = Muted)
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    PlayerControl(stringResource(if (playing) R.string.pause else R.string.play), if (playing) TransportIcon.PAUSE else TransportIcon.PLAY,
+                    PlayerControl(stringResource(if (playRequested) R.string.pause else R.string.play), if (playRequested) TransportIcon.PAUSE else TransportIcon.PLAY,
                         if (failure == null) Modifier.focusRequester(playFocus) else Modifier, failure == null) {
                         if (player.playWhenReady) player.pause() else player.play()
                     }
@@ -222,7 +245,7 @@ import kotlinx.coroutines.delay
                 }
                 failure?.let {
                     if (it == Failure.VIP) AccessMessage(state.account) else FailureMessage(it, vm::refresh, Modifier.focusRequester(playFocus))
-                    if (it in listOf(Failure.SIGNED_OUT, Failure.EXPIRED, Failure.VIP)) Action(stringResource(R.string.sign_in), if (it == Failure.VIP) Modifier.focusRequester(playFocus) else Modifier) { vm.signInForPlayback() }
+                    if (it in listOf(Failure.SIGNED_OUT, Failure.EXPIRED, Failure.VIP, Failure.CAPACITY)) Action(stringResource(R.string.sign_in), if (it == Failure.VIP) Modifier.focusRequester(playFocus) else Modifier) { vm.signInForPlayback() }
                 }
             }
         }
@@ -244,16 +267,13 @@ import kotlinx.coroutines.delay
                 }
             }
         }
-        // Explicit cue line positions otherwise bypass SubtitleView's bottom padding.
-        // Keep text captions inside the same safe rectangle as controls, above transport.
-        BoxWithConstraints(Modifier.fillMaxSize().padding(safe)) {
+        // A separate viewport also contains explicitly positioned cues above transport.
+        if (failure == null) BoxWithConstraints(Modifier.fillMaxSize().padding(safe)) {
             AndroidView(factory = { SubtitleView(it).apply { setUserDefaultStyle(); setUserDefaultTextSize(); setBottomPaddingFraction(0.04f) } },
                 modifier = Modifier.fillMaxSize().padding(end = if (settings) maxWidth / 3 else 0.dp,
-                    bottom = if (controls && !settings) 150.dp else 0.dp),
-                update = { subtitles -> subtitles.setCues(cues.map { cue ->
-                    if (cue.text != null) cue.buildUpon().setLine(Cue.DIMEN_UNSET, Cue.TYPE_UNSET)
-                        .setLineAnchor(Cue.TYPE_UNSET).build() else cue
-                }) })
+                    bottom = if (controls && !settings) maxOf(0.dp,
+                        controlsHeight - safe.calculateTopPadding() - safe.calculateBottomPadding() - 20.dp) else 0.dp),
+                update = { subtitles -> subtitles.setCues(cues) })
         }
         if (buffering && failure == null) Box(Modifier.align(Alignment.Center).background(Panel, RoundedCornerShape(16.dp)).padding(24.dp)) { Loading() }
     }

@@ -23,7 +23,8 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 
-enum class UpdatePhase { IDLE, CHECKING, CURRENT, DOWNLOADING, READY, FAILED, INSTALLING, INCOMPATIBLE }
+enum class UpdatePhase { IDLE, CHECKING, CURRENT, DOWNLOADING, READY, FAILED, INSTALLING, INCOMPATIBLE, SIGNER_MISMATCH }
+internal class UpdateSignerException : IllegalStateException("Release signing certificate differs from installed app")
 enum class ReportPhase { IDLE, SENDING, SENT, FAILED, UNCONFIGURED }
 data class UpdateState(val phase: UpdatePhase = UpdatePhase.IDLE, val version: String = "", val progress: Int = 0,
     val incidentKnown: Boolean = false, val incidentChecked: Boolean = false, val report: ReportPhase = ReportPhase.IDLE,
@@ -62,7 +63,7 @@ class UpdateService(private val context: Context) {
     init { installPrefs.registerOnSharedPreferenceChangeListener(installListener) }
     fun close() {
         installPrefs.unregisterOnSharedPreferenceChangeListener(installListener)
-        http.dispatcher.cancelAll(); http.connectionPool.evictAll()
+        http.closeAsync()
     }
     private fun change(block: (UpdateState) -> UpdateState) { mutable.update(block) }
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -110,6 +111,7 @@ class UpdateService(private val context: Context) {
                 catch (_: Exception) { change { it.copy(incidentChecked = false) } }
             }
         } catch (cancel: CancellationException) { change { it.copy(phase = UpdatePhase.IDLE) }; throw cancel }
+        catch (_: UpdateSignerException) { change { it.copy(phase = UpdatePhase.SIGNER_MISMATCH) } }
         catch (_: Exception) { change { it.copy(phase = UpdatePhase.FAILED) } }
     }
     private suspend fun download(release: ReleaseInfo) = withContext(Dispatchers.IO) {
@@ -161,7 +163,7 @@ class UpdateService(private val context: Context) {
         check(downloaded.applicationInfo?.minSdkVersion?.let { it <= Build.VERSION.SDK_INT } == true)
         val first = downloaded.signingInfo?.apkContentsSigners?.map { it.toCharsString() }?.toSet()
         val second = installed.signingInfo?.apkContentsSigners?.map { it.toCharsString() }?.toSet()
-        check(!first.isNullOrEmpty() && first == second)
+        if (first.isNullOrEmpty() || first != second) throw UpdateSignerException()
     }
     suspend fun install() = installLock.withLock { withContext(Dispatchers.IO) {
         if (mutable.value.phase != UpdatePhase.READY) return@withContext

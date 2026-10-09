@@ -24,7 +24,7 @@ data class Account(val status: AccountStatus) {
 data class Viewing(val title: Title, val episode: Episode?, val position: Long, val duration: Long) {
     val key get() = title.key + (episode?.let { ":${it.key}" } ?: "")
 }
-enum class Failure { NETWORK, ACCESS, VIP, EXPIRED, BLOCKED, CHANGED, MEDIA, SIGNED_OUT, UNAVAILABLE, UNSUPPORTED }
+enum class Failure { NETWORK, ACCESS, VIP, EXPIRED, BLOCKED, CHANGED, MEDIA, SIGNED_OUT, UNAVAILABLE, UNSUPPORTED, CAPACITY }
 class SiteException(val failure: Failure) : Exception(failure.name)
 
 data class Profile(val id: String, val name: String, val avatar: Int = 0, val quality: Int = 0)

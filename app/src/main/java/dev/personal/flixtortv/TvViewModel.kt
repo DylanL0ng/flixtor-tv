@@ -30,8 +30,8 @@ data class TvState(
     val appending: Boolean = false, val appendFailure: Failure? = null, val catalogKey: String = "",
     val screenFit: ScreenFit = ScreenFit(),
 )
-class TvViewModel(app: Application) : AndroidViewModel(app) {
-    val client = FlixtorClient(SessionStore(app))
+class TvViewModel @JvmOverloads constructor(app: Application,
+    val client: FlixtorClient = FlixtorClient(SessionStore(app))) : AndroidViewModel(app) {
     val updates = UpdateService(app)
     private val profiles = ProfileStore(app)
     private var library = LibraryStore(app)
@@ -62,6 +62,7 @@ class TvViewModel(app: Application) : AndroidViewModel(app) {
             account = when {
                 failure == Failure.SIGNED_OUT -> Account(false)
                 failure == Failure.EXPIRED -> Account(AccountStatus.EXPIRED)
+                failure == Failure.CAPACITY && !it.account.signedIn -> Account(false)
                 operation == "ACCOUNT" && failure in listOf(Failure.NETWORK, Failure.UNAVAILABLE, Failure.CHANGED) -> Account(AccountStatus.UNAVAILABLE)
                 else -> it.account
             }) }

@@ -1,4 +1,7 @@
 <resources>
+    <string name="error_capacity">Free access is full right now. Sign in to a VIP account, or try again later.</string>
+    <string name="check_account">Check account</string>
+    <string name="sign_in_password">Sign in with email and password</string>
     <string name="app_name">FlixTor TV · Personal</string>
     <string name="brand">FLIXTOR</string>
     <string name="home">Home</string>
@@ -87,6 +90,8 @@
     <string name="update_current">Latest published version installed.</string>
     <string name="update_downloading">Downloading an update…</string>
     <string name="update_ready">Update ready. Android may ask you to allow app installation.</string>
+    <string name="update_available_title">Update %1$s is ready</string>
+    <string name="update_later">Later</string>
     <string name="update_unavailable">Update or fix status is unavailable. Check your connection and try again.</string>
     <string name="update_installing">Waiting for Android to install the update…</string>
     <string name="check_updates">Check for updates</string>
@@ -111,6 +116,7 @@
     <string name="track_number">Track %1$d</string>
     <string name="no_tracks">No tracks available.</string>
     <string name="update_incompatible">A newer release requires a newer Android version.</string>
+    <string name="update_signer_mismatch">This installation uses a different signing key. Android cannot apply the published release in place. Install the personal release to enable future updates; replacing a debug build may require removing its local data.</string>
     <string name="update_install_failed">Android did not install the update. Your current app and data are safe. Try again when ready.</string>
     <string name="update_after_playback">Update ready. Return to the title page to install it.</string>
     <string name="profile_name_required">Enter a profile name to save it.</string>

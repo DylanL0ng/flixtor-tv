@@ -15,6 +15,7 @@ internal class CatalogPages(root: File) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int, List<Title>>) = size > 8
     }
     private var page = 0
+    private var snapshot: Snapshot? = null
     @Synchronized fun append(titles: List<Title>): List<Title> {
         val unique = titles.filter { it.key !in seen }.distinctBy(Title::key)
         if (unique.isNotEmpty()) {
@@ -26,7 +27,7 @@ internal class CatalogPages(root: File) {
             cache[number] = unique
             unique.forEachIndexed { index, title -> seen.add(title.key); keys.add(title.key); locations.add(number to index) }
         }
-        return Snapshot(keys.size)
+        return snapshot?.takeIf { it.size == keys.size } ?: Snapshot(keys.size).also { snapshot = it }
     }
     @Synchronized private fun getTitle(index: Int): Title {
         val (number, offset) = locations[index]
