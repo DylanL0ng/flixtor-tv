@@ -12,6 +12,17 @@ import java.util.UUID
 
 @RunWith(AndroidJUnit4::class)
 class ProfileStorageTest {
+    @Test fun screenFitIsDeviceWideAndSurvivesRestart() {
+        val context = isolatedContext()
+        assertEquals(ScreenFit(), ScreenFitStore(context).read())
+        ScreenFitStore(context).save(ScreenFit(10, 0))
+        assertEquals(ScreenFit(10, 0), ScreenFitStore(context).read())
+        val profiles = ProfileStore(context)
+        profiles.initialize()
+        profiles.save(null, "Another", 1)
+        assertEquals(ScreenFit(10, 0), ScreenFitStore(context).read())
+        try { ScreenFit(-1, 5); fail("Expected bounded margins") } catch (_: IllegalArgumentException) { }
+    }
     private fun isolatedContext(): Context {
         val prefix = "test_${UUID.randomUUID()}_"
         return object : ContextWrapper(InstrumentationRegistry.getInstrumentation().targetContext) {

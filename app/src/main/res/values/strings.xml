@@ -19,7 +19,6 @@
     <string name="back">Back</string>
     <string name="retry">Retry</string>
     <string name="loading">Loading…</string>
-    <string name="load_more">Load more</string>
     <string name="latest">Latest</string>
     <string name="top_rated">Top rated</string>
     <string name="search_hint">Search movies and TV shows</string>
@@ -35,8 +34,6 @@
     <string name="rating">Rating %1$s</string>
     <string name="vip_title">Your VIP account</string>
     <string name="vip_help">Sign in with your existing FlixTor account. Access is controlled by the service.</string>
-    <string name="signed_in">Signed in on this device.</string>
-    <string name="signed_out">You are currently signed out.</string>
     <string name="pair_phone">Sign in using your phone</string>
     <string name="pair_help">Scan the QR code with your phone, sign in, and approve this device.</string>
     <string name="pair_expiry">Code expires after 3 minutes.</string>
@@ -102,7 +99,6 @@
     <string name="report_sent">Problem report sent to Dylan.</string>
     <string name="report_failed">Could not send the report. Please try again.</string>
     <string name="report_unconfigured">Problem reporting is not configured in this build.</string>
-    <string name="account_unknown">Account status unavailable. Retry to check your session.</string>
     <string name="error_signed_out">This title requires you to sign in. Sign in and try playback again.</string>
     <string name="error_unavailable">The service is busy or unavailable. Please try again later.</string>
     <string name="error_unsupported">Your TV could not decode this video. Try another title or lower quality.</string>
@@ -114,9 +110,28 @@
     <string name="subtitles_off">Off</string>
     <string name="track_number">Track %1$d</string>
     <string name="no_tracks">No tracks available.</string>
-    <string name="player_time">%1$s / %2$s · %3$s remaining</string>
     <string name="update_incompatible">A newer release requires a newer Android version.</string>
     <string name="update_install_failed">Android did not install the update. Your current app and data are safe. Try again when ready.</string>
     <string name="update_after_playback">Update ready. Return to the title page to install it.</string>
     <string name="profile_name_required">Enter a profile name to save it.</string>
+    <string name="account_checking">Checking account…</string>
+    <string name="account_guest">Guest · Free access</string>
+    <string name="account_signed_in">Signed in · VIP unverified</string>
+    <string name="account_vip">VIP active</string>
+    <string name="account_expired">Session or VIP expired</string>
+    <string name="account_unavailable">Account unavailable</string>
+    <string name="vip_guest_required">VIP access required. Sign in to watch.</string>
+    <string name="vip_signed_in_required">The service requires active VIP access for this title. Your current session does not grant access.</string>
+    <string name="display">Display</string>
+    <string name="screen_fit">Screen fit</string>
+    <string name="screen_fit_help">Adjust until all four edges of the guide are visible. Video stays full-screen.</string>
+    <string name="horizontal_margin">Horizontal margin: %1$d%%</string>
+    <string name="vertical_margin">Vertical margin: %1$d%%</string>
+    <string name="decrease_margin">Decrease</string>
+    <string name="increase_margin">Increase</string>
+    <string name="reset">Reset</string>
+    <string name="pagination_failed">Could not load the next page. Your place is saved.</string>
+    <string name="timeline">Playback timeline. Left and right preview a seek; Select confirms.</string>
+    <string name="seek_preview">Seek to %1$s · Select to confirm</string>
+    <string name="time_remaining">%1$s remaining</string>
 </resources>

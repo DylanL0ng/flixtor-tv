@@ -14,6 +14,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
@@ -114,8 +116,22 @@ class MainActivity : ComponentActivity() {
     }
     DisposableEffect(images) { onDispose { images.shutdown() } }
     val saveable = key(state.profile?.id) { rememberSaveableStateHolder() }
-    Column(Modifier.fillMaxSize().background(Midnight)) {
-        if (state.screen !in listOf(Screen.PROFILES, Screen.PLAYER, Screen.DETAIL)) Navigation(state.screen, state.focusedKey == null, vm::navigate)
+    var fitting by remember { mutableStateOf(false) }
+    BoxWithConstraints(Modifier.fillMaxSize().background(Midnight)) {
+        val safe = PaddingValues(horizontal = maxWidth * (state.screenFit.horizontal / 100f),
+            vertical = maxHeight * (state.screenFit.vertical / 100f))
+        val backdrop = when (state.screen) {
+            Screen.HOME -> state.shelves.firstOrNull()?.titles?.firstOrNull()?.backdrop
+            Screen.DETAIL -> state.detail?.title?.backdrop
+            else -> null
+        }
+        if (!backdrop.isNullOrBlank()) {
+            AsyncImage(backdrop, null, imageLoader = images, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+            Box(Modifier.fillMaxSize().background(Midnight.copy(alpha = 0.88f)))
+        }
+        CompositionLocalProvider(LocalSafePadding provides safe) {
+        Column(Modifier.fillMaxSize().then(if (state.screen == Screen.PLAYER) Modifier else Modifier.padding(safe))) {
+        if (state.screen !in listOf(Screen.PROFILES, Screen.PLAYER, Screen.DETAIL)) Navigation(state, state.focusedKey == null, vm::navigate)
         if (state.failure == Failure.CHANGED && state.screen != Screen.PLAYER) StructuralRecovery(vm)
         saveable.SaveableStateProvider(state.screen.name) {
             when (state.screen) {
@@ -123,9 +139,9 @@ class MainActivity : ComponentActivity() {
                 Screen.PLAYER -> {
                     val stream = state.stream
                     if (stream != null) PlaybackScreen(stream, state, vm)
-                    else Column(Modifier.fillMaxSize().padding(48.dp), verticalArrangement = Arrangement.Center) {
+                    else Column(Modifier.fillMaxSize().padding(safe).padding(12.dp), verticalArrangement = Arrangement.Center) {
                         if (state.loading) Loading()
-                        state.failure?.let { FailureMessage(it, vm::refresh) }
+                        state.failure?.let { if (it == Failure.VIP) AccessMessage(state.account) else FailureMessage(it, vm::refresh) }
                         Action(stringResource(R.string.back)) { vm.back() }
                         if (state.failure == Failure.CHANGED) StructuralRecovery(vm)
                         if (state.failure in listOf(Failure.VIP, Failure.EXPIRED, Failure.SIGNED_OUT)) {
@@ -137,22 +153,27 @@ class MainActivity : ComponentActivity() {
                 Screen.MOVIES, Screen.SHOWS -> Browse(state, images, vm)
                 Screen.SEARCH -> Search(state, images, vm)
                 Screen.LIST -> Library(state, images, vm)
-                Screen.ACCOUNT -> AccountScreen(state, vm)
+                Screen.ACCOUNT -> AccountScreen(state, vm) { fitting = true }
                 Screen.DETAIL -> DetailScreen(state, images, vm)
             }
         }
+        }
+        }
+        if (fitting) ScreenFitEditor(state.screenFit, vm::setScreenFit) { fitting = false }
     }
 }
 
-@Composable private fun Navigation(active: Screen, restore: Boolean, navigate: (Screen) -> Unit) {
+@Composable private fun Navigation(state: TvState, restore: Boolean, navigate: (Screen) -> Unit) {
+    val active = state.screen
     val focus = remember { FocusRequester() }
     LaunchedEffect(active) { if (restore) focus.requestFocus() }
-    Row(Modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 10.dp)
+    Column(Modifier.fillMaxWidth()) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 6.dp)
         .background(Panel, RoundedCornerShape(16.dp)).border(1.dp, Accent.copy(alpha = 0.16f), RoundedCornerShape(16.dp))
-        .padding(horizontal = 16.dp, vertical = 6.dp),
+        .padding(horizontal = 8.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(stringResource(R.string.brand), color = Accent, fontSize = 20.sp, fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(end = 20.dp))
+            modifier = Modifier.padding(end = 4.dp))
         listOf(Screen.HOME to R.string.home, Screen.MOVIES to R.string.movies, Screen.SHOWS to R.string.shows,
             Screen.SEARCH to R.string.search, Screen.LIST to R.string.my_list, Screen.ACCOUNT to R.string.settings,
             Screen.PROFILES to R.string.profiles).forEach { (screen, label) ->
@@ -164,16 +185,21 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+        Text(accountLabel(state.account), color = if (state.account.status == AccountStatus.VIP) Accent else Muted,
+            fontSize = 13.sp, modifier = Modifier.padding(end = 8.dp, bottom = 4.dp))
+    }
+    }
 }
 
 @Composable private fun Home(s: TvState, images: ImageLoader, vm: TvViewModel) {
     if (s.shelves.isEmpty()) {
-        Column(Modifier.padding(48.dp)) { if (s.loading) Loading(); s.failure?.let { FailureMessage(it, vm::refresh) } }
+        Column(Modifier.padding(12.dp)) { if (s.loading) Loading(); s.failure?.let { FailureMessage(it, vm::refresh) } }
         return
     }
     LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(28.dp), contentPadding = PaddingValues(bottom = 36.dp)) {
         item(key = "hero") { Hero(s.shelves.first().titles.first(), images, restore = s.focusedKey == "hero") { vm.openFrom(it, "hero") } }
-        if (s.failure != null) item { Box(Modifier.padding(horizontal = 48.dp)) { FailureMessage(s.failure, vm::refresh) } }
+        if (s.failure != null) item { Box(Modifier.padding(horizontal = 8.dp)) { FailureMessage(s.failure, vm::refresh) } }
         val continuing = s.viewing.filter { it.position > 1000 && (it.duration <= 0 || it.position < it.duration - 30000) }
             .distinctBy { it.title.key }
         if (continuing.isNotEmpty()) item(key = "continue") {
@@ -197,7 +223,7 @@ class MainActivity : ComponentActivity() {
             modifier = Modifier.fillMaxHeight().fillMaxWidth(0.62f).align(Alignment.CenterEnd))
         Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(listOf(Midnight, Midnight.copy(alpha = 0.92f), Color.Transparent))))
         Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Midnight))))
-        Column(Modifier.padding(start = 48.dp, top = 22.dp, end = 32.dp).widthIn(max = 500.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(Modifier.padding(start = 8.dp, top = 22.dp, end = 32.dp).widthIn(max = 500.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(title.name, fontSize = 34.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text(listOf(title.year, title.genres, if (title.rating.isNotBlank()) stringResource(R.string.rating, title.rating) else "")
                 .filter(String::isNotBlank).joinToString(" · "), color = Muted, fontSize = 15.sp)
@@ -209,8 +235,8 @@ class MainActivity : ComponentActivity() {
 
 @Composable private fun ShelfView(label: String, location: String, titles: List<Title>, images: ImageLoader, focused: String?, open: (Title) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        Text(label, modifier = Modifier.padding(start = 48.dp), fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(18.dp), contentPadding = PaddingValues(horizontal = 48.dp, vertical = 8.dp)) {
+        Text(label, modifier = Modifier.padding(start = 8.dp), fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(18.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)) {
             items(titles, key = Title::key) { Poster(it, images, focused == "$location:${it.key}", open) }
         }
     }
@@ -237,7 +263,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable private fun Browse(s: TvState, images: ImageLoader, vm: TvViewModel) {
-    Column(Modifier.fillMaxSize().padding(horizontal = 48.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    Column(Modifier.fillMaxSize().padding(horizontal = 8.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(stringResource(if (s.screen == Screen.SHOWS) R.string.shows else R.string.movies), fontSize = 28.sp, modifier = Modifier.weight(1f))
             Action(stringResource(R.string.latest)) { vm.sort("latest") }
@@ -248,7 +274,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable private fun Search(s: TvState, images: ImageLoader, vm: TvViewModel) {
-    Column(Modifier.fillMaxSize().padding(horizontal = 48.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    Column(Modifier.fillMaxSize().padding(horizontal = 8.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Field(stringResource(R.string.search_hint), s.query, { vm.search(it) }, Modifier.fillMaxWidth(0.75f))
         if (s.query.isBlank()) {
             Text(stringResource(R.string.search_intro), fontSize = 30.sp)
@@ -258,25 +284,49 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable private fun Results(s: TvState, images: ImageLoader, vm: TvViewModel, modifier: Modifier, more: () -> Unit) {
+    val grid = rememberLazyGridState()
+    val requestMore by rememberUpdatedState(more)
+    val latest by rememberUpdatedState(s)
+    LaunchedEffect(grid, s.catalogKey) {
+        snapshotFlow { grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1 }.distinctUntilChanged().collect { last ->
+            vm.warmCatalog(grid.firstVisibleItemIndex)
+            val current = latest
+            val columns = grid.layoutInfo.visibleItemsInfo.count { it.row == grid.layoutInfo.visibleItemsInfo.firstOrNull()?.row }.coerceAtLeast(1)
+            if (last >= 0 && current.titles.isNotEmpty() && last >= current.titles.size - columns * 2 &&
+                !current.loading && !current.appending && current.appendFailure == null && current.hasMore) requestMore()
+        }
+    }
+    // Re-evaluate after an appended page when the viewport has not moved.
+    LaunchedEffect(s.titles.size, s.appending) {
+        val last = grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+        if (last >= s.titles.size - 2 && last >= 0 && !s.loading && !s.appending && s.appendFailure == null && s.hasMore) requestMore()
+    }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (s.loading) Loading()
         s.failure?.let { FailureMessage(it, vm::refresh) }
         if (!s.loading && s.failure == null && s.titles.isEmpty()) Text(stringResource(R.string.empty_results), color = Muted)
-        LazyVerticalGrid(columns = GridCells.Adaptive(120.dp), modifier = Modifier.weight(1f),
+        LazyVerticalGrid(columns = GridCells.Adaptive(120.dp), state = grid, modifier = Modifier.weight(1f),
             horizontalArrangement = Arrangement.spacedBy(18.dp), verticalArrangement = Arrangement.spacedBy(20.dp),
             contentPadding = PaddingValues(vertical = 12.dp)) {
-            gridItems(s.titles, key = Title::key) { Poster(it, images, s.focusedKey == it.key, vm::open) }
+            items(s.titles.size, key = { index -> (s.titles as? CatalogPages.Snapshot)?.key(index) ?: s.titles[index].key }) { index ->
+                val title = s.titles[index]
+                Poster(title, images, s.focusedKey == title.key, vm::open)
+            }
         }
-        if (s.hasMore && s.titles.isNotEmpty()) Action(stringResource(R.string.load_more), enabled = !s.loading, click = more)
+        if (s.appending) Loading()
+        if (s.appendFailure != null) Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(stringResource(R.string.pagination_failed), color = Muted, modifier = Modifier.weight(1f))
+            Action(stringResource(R.string.retry), click = more)
+        }
     }
 }
 
 @Composable private fun Library(s: TvState, images: ImageLoader, vm: TvViewModel) {
-    if (s.favorites.isEmpty()) Column(Modifier.padding(48.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+    if (s.favorites.isEmpty()) Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         Text(stringResource(R.string.empty_list), fontSize = 32.sp)
         Text(stringResource(R.string.empty_list_help), color = Muted)
         Action(stringResource(R.string.browse)) { vm.navigate(Screen.HOME) }
-    } else Column(Modifier.fillMaxSize().padding(horizontal = 48.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    } else Column(Modifier.fillMaxSize().padding(horizontal = 8.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text(stringResource(R.string.my_list), fontSize = 28.sp)
         Results(s.copy(titles = s.favorites, hasMore = false, loading = false), images, vm, Modifier.weight(1f)) {}
     }
@@ -290,12 +340,12 @@ class MainActivity : ComponentActivity() {
     val focusBack = s.loading || s.failure != null || (title.isSeries && detail.episodes.isEmpty())
     LaunchedEffect(title.key, s.loading, s.failure) { focus.requestFocus() }
     LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = 40.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        item { Box(Modifier.padding(start = 48.dp, top = 16.dp)) {
+        item { Box(Modifier.padding(start = 8.dp, top = 16.dp)) {
             Action(stringResource(R.string.back), modifier = if (focusBack) Modifier.focusRequester(focus) else Modifier) { vm.back() }
         } }
         item { Hero(title, images, showAction = false, showSynopsis = false) {} }
         item {
-            Column(Modifier.padding(horizontal = 48.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Column(Modifier.padding(horizontal = 8.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 if (s.loading) Loading()
                 s.failure?.let { FailureMessage(it, vm::refresh) }
                 if (title.synopsis.isNotBlank()) Text(title.synopsis, color = Muted, fontSize = 16.sp)
@@ -315,11 +365,11 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-        if (title.isSeries && !s.loading && s.failure == null && detail.episodes.isEmpty()) item { Text(stringResource(R.string.no_episodes), modifier = Modifier.padding(horizontal = 48.dp)) }
+        if (title.isSeries && !s.loading && s.failure == null && detail.episodes.isEmpty()) item { Text(stringResource(R.string.no_episodes), modifier = Modifier.padding(horizontal = 8.dp)) }
         detail.episodes.groupBy(Episode::season).forEach { (season, episodes) ->
-            item(key = "season:$season") { Text(stringResource(R.string.season, season), modifier = Modifier.padding(start = 48.dp, top = 12.dp), fontSize = 24.sp) }
+            item(key = "season:$season") { Text(stringResource(R.string.season, season), modifier = Modifier.padding(start = 8.dp, top = 12.dp), fontSize = 24.sp) }
             items(episodes, key = Episode::key) { episode ->
-                Box(Modifier.padding(horizontal = 48.dp)) {
+                Box(Modifier.padding(horizontal = 8.dp)) {
                     Action(stringResource(R.string.episode, episode.number, episode.name), enabled = !s.loading) { vm.play(episode) }
                 }
             }
@@ -327,22 +377,17 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@Composable private fun AccountScreen(s: TvState, vm: TvViewModel) {
+@Composable private fun AccountScreen(s: TvState, vm: TvViewModel, fit: () -> Unit) {
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var confirmClear by remember { mutableStateOf(false) }
     LaunchedEffect(s.account.signedIn) { if (s.account.signedIn) { email = ""; password = "" } }
-    LazyColumn(Modifier.fillMaxSize().padding(horizontal = 48.dp), contentPadding = PaddingValues(bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+    LazyColumn(Modifier.fillMaxSize().padding(horizontal = 8.dp), contentPadding = PaddingValues(bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         item {
             Text(stringResource(R.string.settings), fontSize = 30.sp, fontWeight = FontWeight.SemiBold)
             Text(s.profile?.name.orEmpty(), color = Muted)
             Action(stringResource(R.string.manage_profiles)) { vm.navigate(Screen.PROFILES) }
         }
-        item {
-            Text(stringResource(R.string.playback_settings), fontSize = 24.sp)
-            QualityOptions(s.profile?.quality ?: 0, vm::setQuality)
-        }
-        item { UpdateSettings(vm) }
         item {
             Text(stringResource(R.string.vip_title), fontSize = 30.sp, fontWeight = FontWeight.SemiBold)
             Text(stringResource(R.string.vip_help), color = Muted, modifier = Modifier.padding(top = 8.dp))
@@ -351,7 +396,7 @@ class MainActivity : ComponentActivity() {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (s.loading) Loading()
                 s.failure?.let { FailureMessage(it, if (s.failure == Failure.EXPIRED) vm::startPairing else vm::refresh) }
-                Text(stringResource(if (!s.accountChecked) R.string.account_unknown else if (s.account.signedIn) R.string.signed_in else R.string.signed_out))
+                Text(accountLabel(s.account), color = Accent)
                 if (s.account.signedIn) Action(stringResource(R.string.clear_session), enabled = !s.loading) { vm.clearSession() }
                 else {
                     if (s.pairing) Action(stringResource(R.string.cancel_pair)) { vm.stopPairing() }
@@ -370,6 +415,15 @@ class MainActivity : ComponentActivity() {
                     vm.login(email, password); password = ""
                 }
             }
+        }
+        item {
+            Text(stringResource(R.string.playback_settings), fontSize = 24.sp)
+            QualityOptions(s.profile?.quality ?: 0, vm::setQuality)
+        }
+        item { UpdateSettings(vm) }
+        item {
+            Text(stringResource(R.string.display), fontSize = 24.sp)
+            Action(stringResource(R.string.screen_fit), click = fit)
         }
         item {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {

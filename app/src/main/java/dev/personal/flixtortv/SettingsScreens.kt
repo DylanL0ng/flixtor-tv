@@ -49,7 +49,7 @@ import androidx.tv.material3.Text
     val first = remember { FocusRequester() }
     LaunchedEffect(editing, manage, s.profiles.size) { if (!editing) first.requestFocus() }
     BackHandler(editing || manage) { editing = false; manage = false }
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(48.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
         item {
             Text(stringResource(if (editing && editId == null) R.string.add_profile else if (editing) R.string.edit_profile else if (manage) R.string.manage_profiles else R.string.who_watching),
                 fontSize = 36.sp, fontWeight = FontWeight.Bold)
@@ -101,7 +101,7 @@ import androidx.tv.material3.Text
     deleting?.let { profile ->
         val cancelFocus = remember { FocusRequester() }
         Dialog(onDismissRequest = { deleting = null }) {
-            Column(Modifier.widthIn(max = 520.dp).background(Panel, RoundedCornerShape(16.dp)).padding(28.dp),
+            Column(Modifier.padding(LocalSafePadding.current).widthIn(max = 520.dp).background(Panel, RoundedCornerShape(16.dp)).padding(28.dp),
                 verticalArrangement = Arrangement.spacedBy(20.dp)) {
                 Text(stringResource(R.string.delete_profile_title, profile.name), fontSize = 24.sp)
                 Text(stringResource(R.string.delete_profile_help), color = Muted)
@@ -115,10 +115,15 @@ import androidx.tv.material3.Text
     }
 }
 
-@Composable internal fun QualityOptions(quality: Int, select: (Int) -> Unit) {
+@Composable internal fun QualityOptions(quality: Int, select: (Int) -> Unit, vertical: Boolean = false) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(stringResource(R.string.quality_help), color = Muted)
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(vertical = 6.dp)) {
+        if (vertical) {
+            listOf(0, 720, 1080, 2160).forEach { height ->
+                val label = if (height == 0) stringResource(R.string.auto_quality) else stringResource(R.string.up_to_resolution, height)
+                Action(if (quality == height) stringResource(R.string.selected_option, label) else label, Modifier.fillMaxWidth()) { select(height) }
+            }
+        } else LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(vertical = 6.dp)) {
             items(listOf(0, 720, 1080, 2160), key = { it }) { height ->
                 val label = if (height == 0) stringResource(R.string.auto_quality) else stringResource(R.string.up_to_resolution, height)
                 Action(if (quality == height) stringResource(R.string.selected_option, label) else label) { select(height) }

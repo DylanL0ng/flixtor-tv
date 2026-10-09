@@ -96,4 +96,39 @@ class SiteParserTest {
         val stream = SiteParser.stream("""{"file":"https://media.example/a.m3u8","tracks":[null,{"file":"http://unsafe.example/a.vtt"},{"file":"https://media.example/valid.vtt"}]}""")
         assertEquals(1, stream.captions.size)
     }
+    @Test fun emptyFileCannotHideAccessErrors() {
+        val fixtures = listOf(
+            """{"file":"","message":"VIP required"}""" to Failure.VIP,
+            """{"file":null,"error":"Please log in"}""" to Failure.SIGNED_OUT,
+            """{"file":"","reason":"Session expired"}""" to Failure.EXPIRED,
+            """{"error":"Only available to VIP members"}""" to Failure.VIP,
+            """<section>Outside the free access limit</section>""" to Failure.VIP,
+        )
+        fixtures.forEach { (body, expected) ->
+            try { SiteParser.stream(body); fail("Expected access restriction") }
+            catch (error: SiteException) { assertEquals(expected, error.failure) }
+        }
+        assertEquals(Failure.VIP, SiteParser.responseFailure("", 443))
+        assertEquals(Failure.SIGNED_OUT, SiteParser.responseFailure("""{"file":"https://media.example/a.m3u8"}""", 401))
+    }
+    @Test fun accountDoesNotInferVipFromMarketing() {
+        assertEquals(AccountStatus.GUEST, SiteParser.account("<p>VIP active</p>").status)
+        assertEquals(AccountStatus.SIGNED_IN, SiteParser.account("""<a class="logout">Logout</a><p>VIP members</p>""").status)
+        assertEquals(AccountStatus.VIP, SiteParser.account("""<a class="logout">Logout</a><span data-vip-status="active"></span>""").status)
+        assertEquals(AccountStatus.EXPIRED, SiteParser.account("""<a class="logout">Logout</a><span data-vip-status="expired"></span>""").status)
+    }
+    @Test fun encodedDenialRemainsAnAccessFailure() {
+        val json = """{"file":"","error":"VIP required"}"""
+        val shifted = json.map { c -> if (c.code in 33..126) (33 + (c.code - 33 + 47) % 94).toChar() else c }.joinToString("")
+        val encoded = Base64.getEncoder().encodeToString(shifted.toByteArray()).map { c ->
+            when(c) {
+                in 'a'..'z' -> ('a'.code + (c.code - 'a'.code + 13) % 26).toChar()
+                in 'A'..'Z' -> ('A'.code + (c.code - 'A'.code + 13) % 26).toChar()
+                else -> c
+            }
+        }.joinToString("")
+        try { SiteParser.stream(encoded); fail("Expected VIP restriction") }
+        catch (error: SiteException) { assertEquals(Failure.VIP, error.failure) }
+    }
+
 }

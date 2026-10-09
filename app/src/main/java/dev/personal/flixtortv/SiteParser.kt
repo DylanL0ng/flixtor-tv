@@ -11,7 +11,7 @@ object SiteParser {
         val text = raw.lowercase()
         val message = runCatching {
             val obj = JSONObject(raw)
-            if (obj.has("file")) return null
+            if (runCatching { secureUrl(obj.optString("file")) }.isSuccess && status in 200..299) return null
             listOf("error", "message", "reason", "status").map { obj.optString(it) }.joinToString(" ").lowercase()
         }.getOrElse {
             val doc = Jsoup.parse(raw)
@@ -27,6 +27,8 @@ object SiteParser {
             status == 401 || "please sign in" in message || "please log in" in message ||
                 "login required" in message || "not logged in" in message || "<title>sign in" in text -> Failure.SIGNED_OUT
             status == 443 || "vip required" in message || "vip only" in message ||
+                "only available to vip" in message || "only available for vip" in message ||
+                "free access limit" in message || "outside the free" in message ||
                 "vip members" in message || "active vip" in message -> Failure.VIP
             status == 403 || "access denied" in message || "verify your browser" in message -> Failure.ACCESS
             status !in 200..299 -> Failure.NETWORK
@@ -90,7 +92,18 @@ object SiteParser {
         return Detail(original.copy(poster = poster.ifBlank { original.poster },
             synopsis = description, backdrop = backdrop), episodes)
     }
-    fun account(html: String): Account = Account(Jsoup.parse(html).select(".logout").isNotEmpty())
+    fun account(html: String): Account {
+        val doc = Jsoup.parse(html)
+        if (doc.select(".logout").isEmpty()) return Account(AccountStatus.GUEST)
+        // Entitlement must come from account-specific markup, never catalogue marketing.
+        val account = doc.select("[data-vip-status], .account-status, .vip-status")
+        val status = account.attr("data-vip-status").lowercase()
+        return Account(when {
+            status == "expired" -> AccountStatus.EXPIRED
+            status == "active" || account.any { it.text().equals("VIP active", true) } -> AccountStatus.VIP
+            else -> AccountStatus.SIGNED_IN
+        })
+    }
     // This mirrors the public player's transport encoding; the server still enforces access.
     fun decodePlayback(raw: String): String {
         if (raw.trimStart().startsWith("{")) return raw

@@ -16,7 +16,11 @@ data class Detail(val title: Title, val episodes: List<Episode>)
 data class Caption(val uri: String, val label: String, val mime: String, val default: Boolean)
 data class Stream(val uri: String, val captions: List<Caption>)
 data class PairCode(val code: String, val url: String)
-data class Account(val signedIn: Boolean)
+enum class AccountStatus { CHECKING, GUEST, SIGNED_IN, VIP, EXPIRED, UNAVAILABLE }
+data class Account(val status: AccountStatus) {
+    constructor(signedIn: Boolean) : this(if (signedIn) AccountStatus.SIGNED_IN else AccountStatus.GUEST)
+    val signedIn get() = status == AccountStatus.SIGNED_IN || status == AccountStatus.VIP
+}
 data class Viewing(val title: Title, val episode: Episode?, val position: Long, val duration: Long) {
     val key get() = title.key + (episode?.let { ":${it.key}" } ?: "")
 }
