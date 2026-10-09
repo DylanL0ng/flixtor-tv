@@ -112,12 +112,12 @@ object SiteParser {
             val obj = JSONObject(decoded)
             val uri = secureUrl(obj.getString("file"))
             val tracks = obj.optJSONArray("tracks")
-            val captions = (0 until (tracks?.length() ?: 0)).mapNotNull { index ->
-                val track = tracks!!.getJSONObject(index)
+            val captions = (0 until minOf(tracks?.length() ?: 0, 64)).mapNotNull { index ->
+                val track = tracks!!.optJSONObject(index) ?: return@mapNotNull null
                 if (track.optString("kind", "captions") !in listOf("captions", "subtitles")) return@mapNotNull null
                 val file = track.optString("file")
                 if (file.isBlank()) return@mapNotNull null
-                val url = secureUrl(URI(BASE).resolve(file).toString())
+                val url = runCatching { secureUrl(URI(BASE).resolve(file).toString()) }.getOrNull() ?: return@mapNotNull null
                 Caption(url, track.optString("label"),
                     if (URI(url).path.endsWith(".srt")) "application/x-subrip" else "text/vtt",
                     track.optBoolean("default"))

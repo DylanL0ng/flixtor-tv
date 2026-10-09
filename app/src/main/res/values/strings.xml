@@ -6,7 +6,6 @@
     <string name="shows">TV Shows</string>
     <string name="search">Search</string>
     <string name="my_list">My List</string>
-    <string name="account">Account</string>
     <string name="popular">Popular now</string>
     <string name="new_movies">New movies</string>
     <string name="new_shows">New TV shows</string>
@@ -62,7 +61,6 @@
     <string name="error_media">Playback failed. Retry to obtain a fresh stream.</string>
     <string name="quality">Video quality</string>
     <string name="auto_quality">Auto</string>
-    <string name="resolution">%1$dp</string>
     <string name="qr_description">Scan to sign into this TV</string>
     <string name="poster_description">%1$s artwork</string>
     <string name="remaining">Resume at %1$d:%2$02d</string>
@@ -119,4 +117,6 @@
     <string name="player_time">%1$s / %2$s · %3$s remaining</string>
     <string name="update_incompatible">A newer release requires a newer Android version.</string>
     <string name="update_install_failed">Android did not install the update. Your current app and data are safe. Try again when ready.</string>
+    <string name="update_after_playback">Update ready. Return to the title page to install it.</string>
+    <string name="profile_name_required">Enter a profile name to save it.</string>
 </resources>

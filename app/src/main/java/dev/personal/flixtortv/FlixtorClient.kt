@@ -138,4 +138,5 @@ class FlixtorClient(private val sessions: SessionStore) {
         return SiteParser.stream(raw(path))
     }
     fun clearSession() { csrf = ""; sessions.clear() }
+    fun close() { mediaClient.dispatcher.cancelAll(); mediaClient.connectionPool.evictAll() }
 }

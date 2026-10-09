@@ -5,6 +5,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 
+// These bounded writes must finish before marking migration complete or switching libraries.
+@android.annotation.SuppressLint("ApplySharedPref")
 class ProfileStore(private val context: Context) {
     private val prefs = context.getSharedPreferences("profiles", Context.MODE_PRIVATE)
     fun all(): List<Profile> = try {

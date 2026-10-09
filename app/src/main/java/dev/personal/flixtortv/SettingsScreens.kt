@@ -51,7 +51,7 @@ import androidx.tv.material3.Text
     BackHandler(editing || manage) { editing = false; manage = false }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(48.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
         item {
-            Text(stringResource(if (editing) R.string.edit_profile else if (manage) R.string.manage_profiles else R.string.who_watching),
+            Text(stringResource(if (editing && editId == null) R.string.add_profile else if (editing) R.string.edit_profile else if (manage) R.string.manage_profiles else R.string.who_watching),
                 fontSize = 36.sp, fontWeight = FontWeight.Bold)
             Text(stringResource(R.string.profile_help), color = Muted, modifier = Modifier.padding(top = 8.dp))
         }
@@ -79,6 +79,7 @@ import androidx.tv.material3.Text
             item { Column(Modifier.widthIn(max = 520.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 ProfileAvatar(avatar)
                 Field(stringResource(R.string.profile_name), name, { name = it.take(30) })
+                if (name.trim().isEmpty()) Text(stringResource(R.string.profile_name_required), color = Muted)
                 Text(stringResource(R.string.choose_avatar), color = Muted)
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     items((0..6).toList(), key = { it }) { value ->
@@ -159,7 +160,12 @@ import androidx.tv.material3.Text
     val context = LocalContext.current
     Column(Modifier.padding(horizontal = 24.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         when {
-            state.phase == UpdatePhase.READY -> Action(stringResource(R.string.install_update)) { (context as? MainActivity)?.installUpdate() }
+            state.phase == UpdatePhase.READY -> {
+                if (app.screen == Screen.PLAYER) {
+                    Text(stringResource(R.string.update_after_playback), color = Muted)
+                    Action(stringResource(R.string.back)) { vm.back() }
+                } else Action(stringResource(R.string.install_update)) { (context as? MainActivity)?.installUpdate() }
+            }
             state.phase in listOf(UpdatePhase.CHECKING, UpdatePhase.DOWNLOADING, UpdatePhase.INSTALLING) -> Text(stringResource(R.string.update_checking), color = Muted)
             state.incidentKnown && incidentMatches -> Text(stringResource(R.string.fix_pending), color = Muted)
             else -> {

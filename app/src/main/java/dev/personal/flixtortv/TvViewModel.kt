@@ -60,7 +60,7 @@ class TvViewModel(app: Application) : AndroidViewModel(app) {
     fun fingerprint() = mutable.value.failureOperation.lowercase() + ".response-v1"
     fun report() { viewModelScope.launch { updates.report(mutable.value.failureOperation, fingerprint()) } }
     fun installUpdate() { if (mutable.value.screen != Screen.PLAYER) viewModelScope.launch { updates.install() } }
-    override fun onCleared() { updates.close(); super.onCleared() }
+    override fun onCleared() { updates.close(); client.close(); super.onCleared() }
     fun selectProfile(id: String) {
         val profile = profiles.all().firstOrNull { it.id == id } ?: return
         work?.cancel(); stopPairing(); pendingPlayback = null
@@ -75,8 +75,11 @@ class TvViewModel(app: Application) : AndroidViewModel(app) {
     }
     fun deleteProfile(id: String) {
         val list = profiles.delete(id)
-        update { it.copy(profiles = list) }
-        if (mutable.value.profile?.id == id) { library = LibraryStore(getApplication()); navigate(Screen.PROFILES) }
+        if (mutable.value.profile?.id == id) {
+            work?.cancel(); stopPairing(); pendingPlayback = null
+            library = LibraryStore(getApplication(), list.first().id)
+            update { TvState(screen = Screen.PROFILES, profiles = list, account = it.account, accountChecked = it.accountChecked) }
+        } else update { it.copy(profiles = list) }
     }
     fun setQuality(height: Int) {
         val id = mutable.value.profile?.id ?: return
@@ -94,6 +97,7 @@ class TvViewModel(app: Application) : AndroidViewModel(app) {
         play(pending.second)
     }
     fun navigate(screen: Screen) {
+        if (screen != Screen.ACCOUNT) pendingPlayback = null
         work?.cancel(); stopPairing()
         update { it.copy(screen = screen, failure = null, titles = emptyList(), page = 1, hasMore = true,
             detail = null, stream = null, loading = false, focusedKey = null) }
@@ -151,6 +155,7 @@ class TvViewModel(app: Application) : AndroidViewModel(app) {
     }
     fun open(title: Title) = openFrom(title, title.key)
     fun openFrom(title: Title, location: String) {
+        pendingPlayback = null
         val previous = mutable.value
         if (previous.screen != Screen.DETAIL) origin = previous.screen
         stopPairing()
@@ -169,6 +174,16 @@ class TvViewModel(app: Application) : AndroidViewModel(app) {
                 update { it.copy(screen = origin, failure = null, loading = false, viewing = library.viewing()) }; true
             }
             Screen.HOME, Screen.PROFILES -> false
+            Screen.ACCOUNT -> {
+                val pending = pendingPlayback
+                if (pending == null) navigate(Screen.HOME)
+                else {
+                    work?.cancel(); stopPairing(); pendingPlayback = null
+                    update { it.copy(screen = Screen.DETAIL, detail = pending.first, episode = pending.second,
+                        loading = false, failure = null) }
+                }
+                true
+            }
             else -> { navigate(Screen.HOME); true }
         }
     }
@@ -220,6 +235,7 @@ class TvViewModel(app: Application) : AndroidViewModel(app) {
     }
     fun stopPairing() { pairing?.cancel(); update { it.copy(pairing = false, pair = null) } }
     fun clearSession() {
+        pendingPlayback = null
         work?.cancel(); stopPairing(); client.clearSession()
         update { it.copy(account = Account(false), failure = null) }
     }

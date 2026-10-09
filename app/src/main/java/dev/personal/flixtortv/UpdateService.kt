@@ -15,6 +15,7 @@ import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import okhttp3.*
@@ -45,6 +46,7 @@ class UpdateService(private val context: Context) {
     private val mutable = MutableStateFlow(UpdateState())
     val state = mutable.asStateFlow()
     private val checkLock = Mutex()
+    private val installLock = Mutex()
     private val apk = File(context.cacheDir, "updates/update.apk")
     private val root = "https://github.com/DylanL0ng/flixtor-tv/releases/latest/download/"
     private var readyRelease: ReleaseInfo? = null
@@ -58,8 +60,11 @@ class UpdateService(private val context: Context) {
         }
     }
     init { installPrefs.registerOnSharedPreferenceChangeListener(installListener) }
-    fun close() { installPrefs.unregisterOnSharedPreferenceChangeListener(installListener) }
-    private fun change(block: (UpdateState) -> UpdateState) { mutable.value = block(mutable.value) }
+    fun close() {
+        installPrefs.unregisterOnSharedPreferenceChangeListener(installListener)
+        http.dispatcher.cancelAll(); http.connectionPool.evictAll()
+    }
+    private fun change(block: (UpdateState) -> UpdateState) { mutable.update(block) }
     @OptIn(ExperimentalCoroutinesApi::class)
     private suspend fun request(request: Request): Response = suspendCancellableCoroutine { continuation ->
         val call = http.newCall(request)
@@ -116,7 +121,12 @@ class UpdateService(private val context: Context) {
                 check(response.isSuccessful)
                 val body = response.body ?: error("Empty APK")
                 val size = body.contentLength()
-                require(size in 1..150L * 1024 * 1024 && context.cacheDir.usableSpace > size + 10L * 1024 * 1024)
+                require(size in 1..150L * 1024 * 1024)
+                val storage = context.getSystemService(android.os.storage.StorageManager::class.java)
+                val volume = storage.getUuidForPath(context.cacheDir)
+                val required = size + 10L * 1024 * 1024
+                check(storage.getAllocatableBytes(volume) >= required)
+                storage.allocateBytes(volume, required)
                 body.byteStream().use { input -> temporary.outputStream().use { output ->
                     val buffer = ByteArray(65536)
                     var total = 0L
@@ -153,11 +163,12 @@ class UpdateService(private val context: Context) {
         val second = installed.signingInfo?.apkContentsSigners?.map { it.toCharsString() }?.toSet()
         check(!first.isNullOrEmpty() && first == second)
     }
-    suspend fun install() = withContext(Dispatchers.IO) {
-        check(mutable.value.phase == UpdatePhase.READY && apk.isFile)
+    suspend fun install() = installLock.withLock { withContext(Dispatchers.IO) {
+        if (mutable.value.phase != UpdatePhase.READY) return@withContext
         change { it.copy(phase = UpdatePhase.INSTALLING, installationFailed = false) }
         var sessionId: Int? = null
         try {
+            check(apk.isFile)
             validate(apk, readyRelease ?: error("Missing release metadata"))
             val installer = context.packageManager.packageInstaller
             val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
@@ -178,9 +189,9 @@ class UpdateService(private val context: Context) {
             change { it.copy(phase = UpdatePhase.READY) }; throw cancel
         } catch (_: Exception) {
             sessionId?.let { context.packageManager.packageInstaller.abandonSession(it) }
-            change { it.copy(phase = UpdatePhase.READY, installationFailed = true) }
+            change { it.copy(phase = if (apk.isFile) UpdatePhase.READY else UpdatePhase.FAILED, installationFailed = true) }
         }
-    }
+    } }
     fun resetReport() { reportGeneration++; change { it.copy(report = ReportPhase.IDLE) } }
     suspend fun report(operation: String, fingerprint: String) {
         if (mutable.value.report in listOf(ReportPhase.SENDING, ReportPhase.SENT)) return

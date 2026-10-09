@@ -92,4 +92,8 @@ class SiteParserTest {
         assertEquals(1, SiteParser.cards(card + "<p>VIP members: please sign in</p>").size)
         assertNotNull(SiteParser.stream("""{"file":"https://media.example/a.m3u8","message":"VIP members"}"""))
     }
+    @Test fun invalidOptionalCaptionsDoNotBlockAnAuthorizedStream() {
+        val stream = SiteParser.stream("""{"file":"https://media.example/a.m3u8","tracks":[null,{"file":"http://unsafe.example/a.vtt"},{"file":"https://media.example/valid.vtt"}]}""")
+        assertEquals(1, stream.captions.size)
+    }
 }

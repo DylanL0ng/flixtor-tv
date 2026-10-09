@@ -437,7 +437,7 @@ class MainActivity : ComponentActivity() {
     Text(stringResource(R.string.loading), color = Accent, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
 }
 
-@Composable internal fun FailureMessage(failure: Failure, retry: () -> Unit, retryModifier: Modifier = Modifier) {
+@Composable internal fun FailureMessage(failure: Failure, retry: () -> Unit, modifier: Modifier = Modifier) {
     val text = when (failure) { Failure.NETWORK -> R.string.error_network; Failure.ACCESS -> R.string.error_access;
         Failure.VIP -> R.string.error_vip; Failure.EXPIRED -> R.string.error_expired; Failure.BLOCKED -> R.string.error_blocked;
         Failure.MEDIA -> R.string.error_media; Failure.CHANGED -> R.string.error_changed;
@@ -445,6 +445,6 @@ class MainActivity : ComponentActivity() {
         Failure.UNSUPPORTED -> R.string.error_unsupported }
     Row(horizontalArrangement = Arrangement.spacedBy(20.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(stringResource(text), color = Color(0xFFFFB4AB), modifier = Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite })
-        Action(stringResource(R.string.retry), modifier = retryModifier, click = retry)
+        Action(stringResource(R.string.retry), modifier = modifier, click = retry)
     }
 }
