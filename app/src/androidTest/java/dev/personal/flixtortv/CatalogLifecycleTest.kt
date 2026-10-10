@@ -41,7 +41,8 @@ class CatalogLifecycleTest {
         var loggedIn = false
         val client = FlixtorClient(SessionStore(app)) { path -> when {
             path == "/home" -> "<meta name=csrf-token content=fixture>" + cards(1) +
-                if (loggedIn) "<a class=logout>Sign out</a><div data-vip-status=active>VIP active</div>" else ""
+                if (loggedIn) "<a class=logout>Sign out</a>" else ""
+            path == "/account" -> "<a class=logout>Sign out</a><span class=acct-status>VIP Active</span>"
             path == "/ajax/viplogin" -> { loggedIn = true; "{}" }
             path.startsWith("/search/slow") -> { searchCalls.incrementAndGet(); withContext(NonCancellable) { delayedSearch.await() } }
             path.startsWith("/search/fast") -> cards(9)

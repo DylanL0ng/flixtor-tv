@@ -43,6 +43,10 @@ All access and VIP decisions remain on the server. Session expiry or media autho
 
 Cold launch asks who's watching. Add, rename, choose an avatar, switch, or delete profiles from Profiles. Up to seven profiles share one encrypted service session. Existing library data migrates once to the default profile. My List (up to 200 titles) and viewing history (up to 100 entries) stay separate per profile. Deletion removes only that profile's library; sign-out affects the shared login. Website Sync Codes are not integrated. Image cache is bounded to 24 MB memory and 80 MB disk. Browse/search load automatically within two rows of the end. Pages are stored on disk for the active query, with up to eight decoded pages retained in memory. Stable title keys preserve focus; query/filter changes reset the grid, while returning from details restores its position. Pagination failures keep loaded titles and offer Retry.
 
+Back on Home or the profile chooser asks for confirmation. Stay is focused by default; Back dismisses the dialog. Back inside profile management/editing and playback closes the current layer first. Exit app closes the task while retaining profiles, the encrypted session and saved viewing progress. Automatic installation waits while the exit dialog or screen-fit editor is open.
+
+Settings offers Refresh account status. Sign-in is confirmed on `/home`; signed-in accounts then check `/account` for the service's entitlement badge. Only confirmed entitlement shows VIP active. Otherwise Signed in remains distinct, with an explanation and refresh recovery.
+
 Settings → Display → Screen fit adjusts device-wide horizontal and vertical safe margins from 0–10%, defaulting to 5%. Preview changes apply only after Save; Cancel/Back discards them. Background artwork and video stay full-screen. Captions and controls remain within safe margins.
 
 Settings → Playback stores Auto / up to 720p / 1080p / 2160p for the active profile. Player Settings includes the same preference, audio tracks, and subtitles. Playback stays adaptive within supported constraints. The player uses compact icon controls over a dark bottom gradient, a remote-focusable timeline, and a scrollable settings drawer. Left/Right on the timeline previews ten-second seeks; Select confirms. Back first cancels an uncommitted seek, then closes player settings, hides visible controls, and returns to detail. Media keys remain supported. Progress callbacks retain the profile/title/episode captured when playback began.
@@ -66,6 +70,7 @@ The dedicated relay lives in `notifications/`; its README covers Vercel deployme
 Observed flows:
 
 - `GET /home`: bootstrap cookie/CSRF, shelves and account state.
+- `GET /account`: authenticated entitlement badge (`.acct-status`), observed on the physical TV without exporting account identifiers or response bodies.
 - `GET /show/{movies|tvshows}?ajax=1&page=...&sort=...`: catalogue HTML fragments.
 - `GET /search/{query}?ajax=1&page=...`: search result HTML.
 - `GET /watch/{movie|tv}/{id}/{slug}`: metadata and episode rows.
@@ -82,3 +87,5 @@ The same-key signed updater was also exercised on the disposable QA emulator: it
 ## Device acceptance checklist
 
 On both an ONN Google TV device and Chromecast with Google TV: browse, search, open details, return to prior focus, navigate episodes, pair VIP account, relaunch and verify session, play/seek/subtitles/quality, background/resume, watch for 30 minutes, disconnect/reconnect, and sign out. Verify invalid/expired VIP and pairing timeout. Actual hardware acceptance remains required. Optional GuestAccessTest (-e liveService true) uses a separate encrypted guest session. Optional VisualQaTest (-e visualQA true -e captureSize 1080, or 720) captures layouts using public sample media; run it only on the separate QA emulator. Screenshots are saved under the test app’s external files directory and kept outside Git.
+
+`ExitNavigationTest` (`-e exitQA true -e captureSize 720` or `1080`) uses disposable-emulator UI fixtures to verify root confirmation, default Stay, dismissal, nested Back and deliberate exit. `AccountEvidenceTest` (`-e accountEvidence true -e expectedAccountStatus VIP`) is an explicit live account check using the device's existing session. It emits only the status category; use the expected state appropriate to the test account. Fixture captures do not establish upgraded physical-TV VIP acceptance.

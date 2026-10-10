@@ -105,7 +105,7 @@ Playback lets video lead. A compact Netflix/Disney-inspired bottom gradient carr
 - Native TV typography, controls and focus restoration.
 - Compact cinema controls with separate track selection and caption space.
 
-Source of truth: `TvTheme.kt`, `MainActivity.kt`, `SettingsScreens.kt`, `PlaybackScreen.kt` and `ScreenFit.kt`. `PRODUCT.md` constrains the personal, remote-operated client; `.impeccable/player-direction.md` records the approved visual direction. The 720p and 1080p emulator review captures use fixtures and public sample media. They establish layout and interaction only, not live VIP access, physical ONN/Chromecast playback, or complete caption acceptance.
+Source of truth: `TvTheme.kt`, `MainActivity.kt`, `SettingsScreens.kt`, `PlaybackScreen.kt` and `ScreenFit.kt`. `PRODUCT.md` constrains the personal, remote-operated client; `.impeccable/player-direction.md` records the approved visual direction. The 720p and 1080p emulator review captures use fixtures and public sample media. The exit/account review in `.impeccable/review/exit-720/` and `exit-1080/` covers those surfaces only; account screenshots use QA status fixtures. These reviews establish layout and interaction, not sustained live VIP access, upgraded physical ONN/Chromecast playback, or complete caption acceptance.
 
 ## Colors
 
@@ -184,6 +184,8 @@ The translucent rounded rail combines brand and destination actions. A compact a
 
 The chooser pairs distinct illustrated avatars with native name actions in a scrolling row. Up to seven profiles share one device service login; personal watchlist, progress and maximum quality remain profile-specific. Settings surfaces service status and recovery actions near the top. Do not imply separate service credentials for each avatar.
 
+**The Account Evidence Rule.** Authentication and entitlement are separate. When a session is signed in but entitlement is unconfirmed, the navigation badge reads Signed in in muted text. Settings repeats Signed in in cyan, explains that VIP access is unconfirmed and provides Refresh account status. Confirmed VIP gets the VIP badge; never infer it from marketing or menu copy. The client checks the signed-in home response, then the account page's observed membership status. Parsing a live status marker is evidence for that state, not a substitute for upgraded physical-TV acceptance.
+
 ### Cinema Player
 
 Media3 supplies playback and tracks; `PlayerView`'s controller is disabled. Compose supplies the bottom controls: compact title, optional episode label, focusable seek timeline, elapsed/remaining time and icon transport. Icons are drawn shapes, not text glyphs. Transport uses the recorded square target and switches from transparent/white to white/midnight on focus. Timeline focus thickens the track and exposes a cyan thumb; a seek preview must be committed or cancelled.
@@ -192,7 +194,11 @@ Vertical drawer choices cover quality, audio and subtitles, with a Back action a
 
 ### Dialogs
 
-Downloaded updates present Install and Later. The update dialog disables Android's platform default width, constrains content to a maximum width (520dp), applies safe padding and the dialog surface, and scrolls its content. Install receives initial focus. Profile deletion uses the same surface language and initially focuses Cancel. Preserve legible action labels; label wrapping defects are not a new component style.
+Dialogs disable Android's platform default width, constrain content to a maximum width (520dp), apply device safe padding once and use the native navy dialog surface. Their scrolling content uses the recorded dialog padding; exit and update action rows reserve vertical focus room (8dp). Preserve legible action labels; label wrapping defects are not a new component style.
+
+**The Deliberate Exit Rule.** Back at root Home or the root profile chooser opens Exit FlixTor TV? with Stay focused by default. Stay or Back dismisses the dialog; only the explicit Exit app action calls `finishAndRemoveTask()`. Back within account, profile editing/management and player overlays retains its nested behavior. Root exit confirmation does not replace navigation Back.
+
+Downloaded updates present Install and Later, with Install initially focused. Profile deletion initially focuses Cancel. Update prompts and automatic install launch are deferred while exit confirmation or screen-fit adjustment is open, preserving the current remote interaction.
 
 ## Do's and Don'ts
 
@@ -203,6 +209,8 @@ Downloaded updates present Install and Later. The update dialog disables Android
 - **Do** restore the initiating content or control focus after navigation and overlays.
 - **Do** give captions a safe viewport separate from player controls.
 - **Do** distinguish service restrictions from structural client failures with visible recovery actions.
+- **Do** default exit confirmation to Stay and preserve nested Back behavior.
+- **Do** explain unconfirmed entitlement beside an actionable account refresh.
 
 ### Don't:
 - **Don't** reintroduce the default Media3 controller alongside custom controls.
@@ -210,3 +218,4 @@ Downloaded updates present Install and Later. The update dialog disables Android
 - **Don't** replace native focus behavior with pointer-only hover feedback.
 - **Don't** treat emulator fixtures as proof of live VIP, caption or physical-device acceptance.
 - **Don't** turn clipped or cramped labels into documented component conventions.
+- **Don't** label a signed-in session VIP without observed entitlement evidence.

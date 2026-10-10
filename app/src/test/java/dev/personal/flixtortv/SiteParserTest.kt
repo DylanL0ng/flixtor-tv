@@ -127,6 +127,16 @@ class SiteParserTest {
         assertEquals(AccountStatus.VIP, SiteParser.account("""<a class="logout">Logout</a><span data-vip-status="active"></span>""").status)
         assertEquals(AccountStatus.EXPIRED, SiteParser.account("""<a class="logout">Logout</a><span data-vip-status="expired"></span>""").status)
     }
+    @Test fun observedAccountBadgeConfirmsEntitlementOnlyForAuthenticatedAccounts() {
+        // Sanitized live account-page shape. No identity, tokens or expiry dates.
+        val active = """<a class="logout">Sign out</a><span class="badge badge-success font-weight-normal acct-status">VIP Active</span>"""
+        assertEquals(AccountStatus.VIP, SiteParser.account(active).status)
+        assertEquals(AccountStatus.EXPIRED, SiteParser.account(active.replace("VIP Active", "VIP Expired")).status)
+        assertEquals(AccountStatus.GUEST, SiteParser.account(active.replace("class=\"logout\"", "class=\"login\"")).status)
+        assertEquals(AccountStatus.SIGNED_IN, SiteParser.account(active.replace("VIP Active", "VIP inactive")).status)
+        assertEquals(AccountStatus.SIGNED_IN, SiteParser.account("<a class=logout>Sign out</a><li class=vipmenu><span class=goldc>VIP</span></li>").status)
+        assertEquals(AccountStatus.EXPIRED, SiteParser.account(active + "<span data-vip-status=expired></span>").status)
+    }
     @Test fun encodedDenialRemainsAnAccessFailure() {
         val json = """{"file":"","error":"VIP required"}"""
         val shifted = json.map { c -> if (c.code in 33..126) (33 + (c.code - 33 + 47) % 94).toChar() else c }.joinToString("")

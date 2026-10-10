@@ -100,11 +100,13 @@ object SiteParser {
         val doc = Jsoup.parse(html)
         if (doc.select(".logout").isEmpty()) return Account(AccountStatus.GUEST)
         // Entitlement must come from account-specific markup, never catalogue marketing.
-        val account = doc.select("[data-vip-status], .account-status, .vip-status")
-        val status = account.attr("data-vip-status").lowercase()
+        // The live /account page exposes its entitlement in .acct-status.
+        val account = doc.select("[data-vip-status], .account-status, .vip-status, .acct-status")
         return Account(when {
-            status == "expired" -> AccountStatus.EXPIRED
-            status == "active" || account.any { it.text().equals("VIP active", true) } -> AccountStatus.VIP
+            account.any { it.attr("data-vip-status").equals("expired", true) ||
+                Regex("\\b(?:VIP\\s+)?expired\\b", RegexOption.IGNORE_CASE).containsMatchIn(it.text()) } -> AccountStatus.EXPIRED
+            account.any { it.attr("data-vip-status").equals("active", true) ||
+                it.text().equals("VIP active", true) } -> AccountStatus.VIP
             else -> AccountStatus.SIGNED_IN
         })
     }

@@ -30,6 +30,23 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
 
+@Composable internal fun ExitConfirmationDialog(stay: () -> Unit, exit: () -> Unit) {
+    val stayFocus = remember { FocusRequester() }
+    Dialog(onDismissRequest = stay, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        LazyColumn(Modifier.padding(LocalSafePadding.current).widthIn(max = 520.dp)
+            .background(Panel, RoundedCornerShape(16.dp)).padding(28.dp),
+            verticalArrangement = Arrangement.spacedBy(20.dp)) {
+            item { Text(stringResource(R.string.exit_title), fontSize = 24.sp) }
+            item { Text(stringResource(R.string.exit_help), color = Muted) }
+            item { Row(Modifier.padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                Action(stringResource(R.string.stay_in_app), Modifier.focusRequester(stayFocus), click = stay)
+                Action(stringResource(R.string.exit_app), click = exit)
+            } }
+        }
+        LaunchedEffect(Unit) { stayFocus.requestFocus() }
+    }
+}
+
 @Composable internal fun UpdateReadyDialog(version: String, dismiss: () -> Unit, install: () -> Unit) {
     val installFocus = remember { FocusRequester() }
     Dialog(onDismissRequest = dismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {

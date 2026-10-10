@@ -97,15 +97,17 @@ class MainActivity : ComponentActivity() {
         owner.lifecycle.addObserver(observer)
         onDispose { owner.lifecycle.removeObserver(observer) }
     }
-    BackHandler(state.screen !in listOf(Screen.HOME, Screen.PROFILES)) { vm.back() }
     val context = LocalContext.current
+    var confirmingExit by rememberSaveable { mutableStateOf(false) }
+    var fitting by remember { mutableStateOf(false) }
+    BackHandler { if (!vm.back()) confirmingExit = true }
     val updateState by vm.updates.state.collectAsStateWithLifecycle()
     val lifecycleState by owner.lifecycle.currentStateFlow.collectAsState()
     var attemptedVersion by remember { mutableStateOf("") }
     var showUpdatePrompt by remember { mutableStateOf(false) }
-    LaunchedEffect(updateState.phase, state.screen, lifecycleState) {
+    LaunchedEffect(updateState.phase, state.screen, lifecycleState, confirmingExit, fitting) {
         if (updateState.phase == UpdatePhase.READY && state.screen != Screen.PLAYER &&
-            lifecycleState == Lifecycle.State.RESUMED && attemptedVersion != updateState.version) {
+            !confirmingExit && !fitting && lifecycleState == Lifecycle.State.RESUMED && attemptedVersion != updateState.version) {
             attemptedVersion = updateState.version
             if (context.packageManager.canRequestPackageInstalls()) (context as? MainActivity)?.installUpdate()
             else showUpdatePrompt = true
@@ -118,7 +120,6 @@ class MainActivity : ComponentActivity() {
     }
     DisposableEffect(images) { onDispose { images.shutdown() } }
     val saveable = key(state.profile?.id) { rememberSaveableStateHolder() }
-    var fitting by remember { mutableStateOf(false) }
     var returnFromFit by remember { mutableStateOf(false) }
     val fitFocus = remember { FocusRequester() }
     LaunchedEffect(fitting) {
@@ -172,13 +173,16 @@ class MainActivity : ComponentActivity() {
         }
         }
         }
-        if (showUpdatePrompt && updateState.phase == UpdatePhase.READY && state.screen != Screen.PLAYER) {
+        if (showUpdatePrompt && !confirmingExit && !fitting && updateState.phase == UpdatePhase.READY && state.screen != Screen.PLAYER) {
             CompositionLocalProvider(LocalSafePadding provides safe) {
             UpdateReadyDialog(updateState.version, { showUpdatePrompt = false }) {
                 showUpdatePrompt = false
                 (context as? MainActivity)?.installUpdate()
             }
             }
+        }
+        if (confirmingExit) CompositionLocalProvider(LocalSafePadding provides safe) {
+            ExitConfirmationDialog({ confirmingExit = false }) { (context as? android.app.Activity)?.finishAndRemoveTask() }
         }
         if (fitting) ScreenFitEditor(state.screenFit, vm::setScreenFit) { returnFromFit = true; fitting = false }
     }
@@ -426,6 +430,8 @@ class MainActivity : ComponentActivity() {
                 if (s.loading) Loading()
                 s.failure?.let { FailureMessage(it, if (s.failure == Failure.EXPIRED) vm::startPairing else vm::refresh) }
                 Text(accountLabel(s.account), color = Accent)
+                if (s.account.status == AccountStatus.SIGNED_IN) Text(stringResource(R.string.account_entitlement_unknown), color = Muted)
+                Action(stringResource(R.string.refresh_account), enabled = !s.loading && !s.pairing) { vm.refresh() }
                 if (s.account.signedIn) Action(stringResource(R.string.clear_session), enabled = !s.loading) { vm.clearSession() }
                 else {
                     if (s.pairing) Action(stringResource(R.string.cancel_pair)) { vm.stopPairing() }

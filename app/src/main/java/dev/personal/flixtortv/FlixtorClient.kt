@@ -114,10 +114,13 @@ class FlixtorClient internal constructor(private val sessions: SessionStore,
     }
     suspend fun account(): Account {
         bootstrap(); val html = raw("/home", allowCapacity = true)
-        return withContext(Dispatchers.Default) {
+        val session = withContext(Dispatchers.Default) {
             Jsoup.parse(html).selectFirst("meta[name=csrf-token]")?.attr("content")?.takeIf { it.isNotBlank() }?.let { csrf = it }
             SiteParser.account(html)
         }
+        if (session.status != AccountStatus.SIGNED_IN) return session
+        val membership = raw("/account", allowCapacity = true)
+        return withContext(Dispatchers.Default) { SiteParser.account(membership) }
     }
     suspend fun login(email: String, password: String): Account {
         bootstrap()

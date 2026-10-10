@@ -1,4 +1,8 @@
 <resources>
+    <string name="exit_title">Exit FlixTor TV?</string>
+    <string name="exit_help">Your profiles, sign-in and viewing progress will be kept.</string>
+    <string name="stay_in_app">Stay</string>
+    <string name="exit_app">Exit app</string>
     <string name="error_capacity">Free access is full right now. Sign in to a VIP account, or try again later.</string>
     <string name="check_account">Check account</string>
     <string name="sign_in_password">Sign in with email and password</string>
@@ -122,7 +126,9 @@
     <string name="profile_name_required">Enter a profile name to save it.</string>
     <string name="account_checking">Checking account…</string>
     <string name="account_guest">Guest · Free access</string>
-    <string name="account_signed_in">Signed in · VIP unverified</string>
+    <string name="account_signed_in">Signed in</string>
+    <string name="account_entitlement_unknown">The service has not confirmed VIP access. Refresh your account status or check your membership on the FlixTor website.</string>
+    <string name="refresh_account">Refresh account status</string>
     <string name="account_vip">VIP active</string>
     <string name="account_expired">Session or VIP expired</string>
     <string name="account_unavailable">Account unavailable</string>

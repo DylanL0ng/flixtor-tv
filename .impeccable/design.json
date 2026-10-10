@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-10-09T20:20:18.587956+00:00",
+  "generatedAt": "2026-10-10T19:56:33.511970+00:00",
   "title": "Design System: Flixtor TV",
   "extensions": {
     "colorMeta": {
@@ -147,6 +147,11 @@
         "name": "timeline-focus",
         "value": "3dp track / 4dp thumb at rest; 6dp track / 7dp cyan thumb when focused",
         "purpose": "Show seek focus independently of transport."
+      },
+      {
+        "name": "dialog-action-room",
+        "value": "8dp vertical action-row padding",
+        "purpose": "Reserve room for native focused-button scaling in exit and update dialogs."
       }
     ]
   },
@@ -195,9 +200,24 @@
       "name": "Downloaded Update Dialog",
       "kind": "custom",
       "refersTo": "dialog",
-      "description": "Safe, scrollable update notice with Install and Later; native width is capped at 520dp.",
+      "description": "Safe, scrollable update notice with Install and Later; native width is capped at 520dp and action rows preserve vertical focus room.",
       "html": "<section class=\"ds-dialog\" role=\"dialog\" aria-labelledby=\"ds-update-title\"><h2 id=\"ds-update-title\">Update available</h2><p>Downloaded and ready to install.</p><div><button>Install</button><button>Later</button></div></section>",
-      "css": ".ds-dialog{max-width:520px;max-height:80vh;overflow:auto;border-radius:16px;background:#1B3457E6;color:#F4F6FC;padding:28px;font-family:Roboto,Arial,sans-serif}.ds-dialog h2{margin:0 0 20px;font-size:24px;font-weight:400}.ds-dialog p{color:#BDCEE7;margin:0 0 20px}.ds-dialog div{display:flex;gap:16px}.ds-dialog button{background:#1B3457E6;color:inherit;min-height:48px;padding:12px 20px;border:0;border-radius:999px;font-size:15px}.ds-dialog button:hover,.ds-dialog button:focus-visible{background:#9CEBFF;color:#06152E;outline:0}.ds-dialog button:active{opacity:.9}"
+      "css": ".ds-dialog{max-width:520px;max-height:80vh;overflow:auto;border-radius:16px;background:#1B3457E6;color:#F4F6FC;padding:28px;font-family:Roboto,Arial,sans-serif}.ds-dialog h2{margin:0 0 20px;font-size:24px;font-weight:400}.ds-dialog p{color:#BDCEE7;margin:0 0 20px}.ds-dialog div{display:flex;gap:16px;padding:8px 0}.ds-dialog button{background:#1B3457E6;color:inherit;min-height:48px;padding:12px 20px;border:0;border-radius:999px;font-size:15px}.ds-dialog button:hover,.ds-dialog button:focus-visible{background:#9CEBFF;color:#06152E;outline:0}.ds-dialog button:active{opacity:.9}"
+    },
+    {
+      "name": "Exit Confirmation",
+      "kind": "custom",
+      "refersTo": "dialog",
+      "description": "Root exit confirmation. Stay gets initial native focus; Back dismisses; explicit Exit app leaves the task.",
+      "html": "<section class=\"ds-exit\" role=\"dialog\" aria-labelledby=\"ds-exit-title\"><h2 id=\"ds-exit-title\">Exit FlixTor TV?</h2><p>Your profiles, sign-in and viewing progress will be kept.</p><div><button class=\"ds-exit-default\">Stay</button><button>Exit app</button></div></section>",
+      "css": ".ds-exit{max-width:520px;max-height:80vh;overflow:auto;background:#1B3457E6;color:#F4F6FC;border-radius:16px;padding:28px;font-family:Roboto,Arial,sans-serif}.ds-exit h2{font-size:24px;font-weight:400;margin:0 0 20px}.ds-exit p{color:#BDCEE7;margin:0 0 20px}.ds-exit div{display:flex;gap:16px;padding:8px 0}.ds-exit button{border:0;border-radius:999px;min-height:48px;padding:12px 20px;background:#1B3457E6;color:#F4F6FC;font-size:15px}.ds-exit button.ds-exit-default,.ds-exit button:hover,.ds-exit button:focus-visible{background:#9CEBFF;color:#06152E;outline:0}.ds-exit button:active{opacity:.9}"
+    },
+    {
+      "name": "Account Entitlement",
+      "kind": "custom",
+      "description": "Signed-in state remains distinct from confirmed VIP, with explanation and refresh. Uses established action, label and muted text primitives.",
+      "html": "<section class=\"ds-account\"><h2>Your VIP account</h2><p class=\"ds-account-status\">Signed in</p><p>The service has not confirmed VIP access. Refresh your account status or check your membership on the FlixTor website.</p><button>Refresh account status</button></section>",
+      "css": ".ds-account{color:#F4F6FC;font-family:Roboto,Arial,sans-serif}.ds-account h2{font-size:30px;font-weight:600;margin:0 0 12px}.ds-account p{color:#BDCEE7;margin:0 0 12px;font-size:16px}.ds-account p.ds-account-status{color:#9CEBFF}.ds-account button{background:#1B3457E6;color:#F4F6FC;min-height:48px;border:0;border-radius:999px;padding:12px 20px;font-size:15px}.ds-account button:hover,.ds-account button:focus-visible{background:#9CEBFF;color:#06152E;outline:0}.ds-account button:active{opacity:.9}"
     }
   ],
   "narrative": {
@@ -229,6 +249,16 @@
         "name": "The Video Leads Rule",
         "body": "Keep playback overlays localized. Continuous full-screen blur is outside the approved world; gradients and a discrete settings drawer provide contrast.",
         "section": "elevation"
+      },
+      {
+        "name": "The Account Evidence Rule",
+        "body": "Authentication and entitlement are separate. When a session is signed in but entitlement is unconfirmed, the navigation badge reads Signed in in muted text. Settings repeats Signed in in cyan, explains that VIP access is unconfirmed and provides Refresh account status. Confirmed VIP gets the VIP badge; never infer it from marketing or menu copy. The client checks the signed-in home response, then the account page's observed membership status. Parsing a live status marker is evidence for that state, not a substitute for upgraded physical-TV acceptance.",
+        "section": "components"
+      },
+      {
+        "name": "The Deliberate Exit Rule",
+        "body": "Back at root Home or the root profile chooser opens Exit FlixTor TV? with Stay focused by default. Stay or Back dismisses the dialog; only the explicit Exit app action calls `finishAndRemoveTask()`. Back within account, profile editing/management and player overlays retains its nested behavior. Root exit confirmation does not replace navigation Back.",
+        "section": "components"
       }
     ],
     "dos": [
@@ -237,14 +267,17 @@
       "**Do** retain full-bleed video and artwork with local contrast layers.",
       "**Do** restore the initiating content or control focus after navigation and overlays.",
       "**Do** give captions a safe viewport separate from player controls.",
-      "**Do** distinguish service restrictions from structural client failures with visible recovery actions."
+      "**Do** distinguish service restrictions from structural client failures with visible recovery actions.",
+      "**Do** default exit confirmation to Stay and preserve nested Back behavior.",
+      "**Do** explain unconfirmed entitlement beside an actionable account refresh."
     ],
     "donts": [
       "**Don't** reintroduce the default Media3 controller alongside custom controls.",
       "**Don't** spread the playback gradient or blur over the entire screen as permanent chrome.",
       "**Don't** replace native focus behavior with pointer-only hover feedback.",
       "**Don't** treat emulator fixtures as proof of live VIP, caption or physical-device acceptance.",
-      "**Don't** turn clipped or cramped labels into documented component conventions."
+      "**Don't** turn clipped or cramped labels into documented component conventions.",
+      "**Don't** label a signed-in session VIP without observed entitlement evidence."
     ]
   }
 }
