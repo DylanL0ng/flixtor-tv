@@ -51,7 +51,6 @@ class VisualQaTest {
         File(context.getExternalFilesDir(null), "update-ready-$suffix.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
         bitmap.recycle()
         assertTrue("Update decision must be visible", hasTitle(instrument.uiAutomation.rootInActiveWindow))
-        instrument.sendKeyDownUpSync(KeyEvent.KEYCODE_DPAD_RIGHT)
         instrument.sendKeyDownUpSync(KeyEvent.KEYCODE_DPAD_CENTER)
         Thread.sleep(300)
         instrument.runOnMainSync { activity.finish() }
@@ -71,11 +70,20 @@ class VisualQaTest {
             mutable = TvViewModel::class.java.getDeclaredField("mutable").apply { isAccessible = true }.get(vm) as MutableStateFlow<TvState>
         }
         val profile = mutable.value.profiles.first()
-        val poster = "https://storage.googleapis.com/gtv-videos-bucket/sample/images/BigBuckBunny.jpg"
+        // Public QA art: Big Buck Bunny poster, CC BY 3.0, Wikimedia Commons.
+        val posterFile = File(context.filesDir, "qa-big-buck-bunny.jpg")
+        if (!posterFile.exists()) {
+            instrument.context.assets.open("qa-big-buck-bunny.jpg").use { input ->
+                posterFile.outputStream().use { output -> input.copyTo(output) }
+            }
+        }
+        val poster = posterFile.toURI().toString()
         val title = Title("1", "/watch/movie/1/qa", "Big Buck Bunny", poster, "2008", "", "Animation",
             "Public sample media used to verify TV controls and screen-safe layout.", poster)
         val base = TvState(profile = profile, profiles = mutable.value.profiles, account = Account(false), accountChecked = true,
-            detail = Detail(title, emptyList()), shelves = listOf(Shelf("movies", listOf(title))), hasMore = false)
+            detail = Detail(title, emptyList()), shelves = listOf(Shelf("movies", (1..7).map { id ->
+                title.copy(id = id.toString(), name = if (id == 1) title.name else "Sample title $id")
+            })), hasMore = false)
         fun render(state: TvState) { instrument.runOnMainSync { mutable.value = state }; Thread.sleep(1800) }
         fun key(code: Int, count: Int = 1) { repeat(count) { instrument.sendKeyDownUpSync(code); Thread.sleep(180) } }
         fun capture(name: String) {
@@ -122,6 +130,9 @@ class VisualQaTest {
         render(base.copy(screen = Screen.ACCOUNT)); capture("settings")
         var fitFocused = false
         val focusTrace = mutableListOf<String>()
+        // Enter through the rail's Settings destination before traversing its content.
+        key(KeyEvent.KEYCODE_DPAD_DOWN, 7)
+        key(KeyEvent.KEYCODE_DPAD_RIGHT)
         repeat(16) {
             if (!fitFocused) {
                 val focus = focused()
@@ -146,7 +157,7 @@ class VisualQaTest {
         instrument.runOnMainSync { updateFlow.value = UpdateState(UpdatePhase.READY, "QA fixture") }
         awaitCondition("Downloaded update must be announced") { visible(context.getString(R.string.update_available_title, "QA fixture")) }
         capture("update-ready")
-        key(KeyEvent.KEYCODE_DPAD_RIGHT); key(KeyEvent.KEYCODE_DPAD_CENTER)
+        key(KeyEvent.KEYCODE_BACK)
         awaitCondition("Later must dismiss the update prompt") { !visible(context.getString(R.string.update_available_title, "QA fixture")) }
         instrument.runOnMainSync { updateFlow.value = UpdateState() }
         val subtitles = "WEBVTT\n\n00:00.000 --> 09:59.000\nSample captions stay clear of the controls.\n"

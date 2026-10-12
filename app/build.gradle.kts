@@ -9,11 +9,14 @@ android {
         applicationId = "dev.personal.flixtortv"
         minSdk = 29
         targetSdk = 34
-        versionCode = providers.environmentVariable("TV_VERSION_CODE").orElse("2").get().toInt()
-        versionName = providers.environmentVariable("TV_VERSION_NAME").orElse("0.2.0").get()
+        versionCode = (providers.environmentVariable("TV_VERSION_CODE").orNull?.trim()?.takeIf { it.isNotEmpty() } ?: "2").toInt()
+        versionName = providers.environmentVariable("TV_VERSION_NAME").orNull?.trim()?.takeIf { it.isNotEmpty() } ?: "0.2.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "COMMIT_SHA", "\"${providers.environmentVariable("TV_COMMIT_SHA").orElse("local").get()}\"")
         buildConfigField("String", "REPORT_URL", "\"${providers.environmentVariable("TV_REPORT_URL").orElse("").get()}\"")
+        // Supplies the IntroDB key from the build environment rather than the viewer. Blank
+        // disables contributing; reading skip segments never needs a key.
+        buildConfigField("String", "INTRODB_API_KEY", "\"${providers.environmentVariable("TV_INTRODB_API_KEY").orElse("").get()}\"")
     }
     buildFeatures { compose = true; buildConfig = true }
     composeOptions { kotlinCompilerExtensionVersion = "1.5.14" }
@@ -22,11 +25,13 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
+    // An empty value (a .env file with the entry left blank) must count as absent:
+    // file("") throws, and an unsigned release build is the intended fallback.
+    val keystorePath = providers.environmentVariable("TV_KEYSTORE").orNull?.trim()?.takeIf { it.isNotEmpty() }
     signingConfigs {
         create("personal") {
-            val path = providers.environmentVariable("TV_KEYSTORE").orNull
-            if (path != null) {
-                storeFile = file(path)
+            if (keystorePath != null) {
+                storeFile = file(keystorePath)
                 storePassword = providers.environmentVariable("TV_STORE_PASSWORD").orNull
                 keyAlias = providers.environmentVariable("TV_KEY_ALIAS").orNull
                 keyPassword = providers.environmentVariable("TV_KEY_PASSWORD").orNull
@@ -36,7 +41,7 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
-            if (providers.environmentVariable("TV_KEYSTORE").isPresent) signingConfig = signingConfigs.getByName("personal")
+            if (keystorePath != null) signingConfig = signingConfigs.getByName("personal")
         }
     }
     testOptions { unitTests.isReturnDefaultValues = true }

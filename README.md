@@ -1,6 +1,6 @@
 # Personal FlixTor TV client
 
-Native Kotlin / Compose for TV app. Sky-inspired blue glass surfaces, seven household profiles, catalogue/search, seasons, phone QR pairing, email/password sign-in, profile-specific My List and Continue Watching, and Media3 HLS playback with custom remote controls. No WebView.
+Native Kotlin / Compose for TV app. Sky-inspired blue glass surfaces, seven household profiles with optional PINs, catalogue/search, seasons, phone QR pairing, email/password sign-in, profile-specific My List and Continue Watching, autoplay of the next episode, IntroDB skip segments with manual marking and contribution, an in-player episode list with watched progress, and Media3 HLS playback with custom remote controls. No WebView.
 
 Targets ONN **Android/Google TV** devices and Chromecast **with Google TV** on Android 10+. ONN Roku TVs and classic cast-only Chromecast devices cannot run this APK. Sky IP061 (Sky Stream) has no supported APK sideloading path.
 
@@ -14,6 +14,15 @@ python3 tools/build_release.py
 ```
 
 Set `JAVA_HOME` to JDK 17 if your default Java differs. The release helper creates a private signing key and config in `~/.local/share/flixtor-tv/`. Keep a secure backup: updates need the same key. Signing keys and passwords never belong in Git. Advanced builds can supply `TV_KEYSTORE`, `TV_STORE_PASSWORD`, `TV_KEY_ALIAS`, and `TV_KEY_PASSWORD` directly to Gradle.
+
+Optional build settings are listed in the tracked template `.env.example`. Copy it to the untracked `.env` and fill in only what you need. Gradle reads these from the environment, so export them before building:
+
+```sh
+cp .env.example .env
+set -a; . ./.env; set +a
+```
+
+Blank entries are treated as unset, so an incomplete `.env` builds normally. Every variable has a working default: `TV_VERSION_NAME` and `TV_VERSION_CODE` fall back to the values in `app/build.gradle.kts`, a missing `TV_KEYSTORE` leaves the release build unsigned, and an empty `TV_REPORT_URL` or `TV_INTRODB_API_KEY` simply disables that feature.
 
 ## Install and update
 
@@ -41,7 +50,7 @@ Account → Sign in using your phone displays the service's pairing QR. Scan on 
 
 All access and VIP decisions remain on the server. Session expiry or media authorization errors require signing in or retrying for a fresh stream. Network/VPN IP changes can invalidate a stream. Captions and resolution depend on the returned stream and the device decoder. No 4K/HDR guarantee. The app pauses in the background; use Play to resume on return.
 
-Cold launch asks who's watching. Add, rename, choose an avatar, switch, or delete profiles from Profiles. Up to seven profiles share one encrypted service session. Existing library data migrates once to the default profile. My List (up to 200 titles) and viewing history (up to 100 entries) stay separate per profile. Deletion removes only that profile's library; sign-out affects the shared login. Website Sync Codes are not integrated. Image cache is bounded to 24 MB memory and 80 MB disk. Browse/search load automatically within two rows of the end. Pages are stored on disk for the active query, with up to eight decoded pages retained in memory. Stable title keys preserve focus; query/filter changes reset the grid, while returning from details restores its position. Pagination failures keep loaded titles and offer Retry.
+Cold launch asks who's watching. Add, rename, choose an avatar, switch, or delete profiles from Profiles. Up to seven profiles share one encrypted service session. Optional four digit PINs protect individual profiles; Manage → Edit sets, changes, or removes one, and the digits are stored only as a salted SHA-256 digest scoped to the profile. A locked profile shows PIN protected and opens a remote keypad instead of the profile. Existing library data migrates once to the default profile. My List (up to 200 titles) and viewing history (up to 100 entries) stay separate per profile. Deletion removes only that profile's library; sign-out affects the shared login. Website Sync Codes are not integrated. Image cache is bounded to 24 MB memory and 80 MB disk. Browse/search load automatically within two rows of the end. Pages are stored on disk for the active query, with up to eight decoded pages retained in memory. Stable title keys preserve focus; query/filter changes reset the grid, while returning from details restores its position. Pagination failures keep loaded titles and offer Retry.
 
 Back on Home or the profile chooser asks for confirmation. Stay is focused by default; Back dismisses the dialog. Back inside profile management/editing and playback closes the current layer first. Exit app closes the task while retaining profiles, the encrypted session and saved viewing progress. Automatic installation waits while the exit dialog or screen-fit editor is open.
 
@@ -49,13 +58,31 @@ Settings offers Refresh account status. Sign-in is confirmed on `/home`; signed-
 
 Settings → Display → Screen fit adjusts device-wide horizontal and vertical safe margins from 0–10%, defaulting to 5%. Preview changes apply only after Save; Cancel/Back discards them. Background artwork and video stay full-screen. Captions and controls remain within safe margins.
 
-Settings → Playback stores Auto / up to 720p / 1080p / 2160p for the active profile. Player Settings includes the same preference, audio tracks, and subtitles. Playback stays adaptive within supported constraints. The player uses compact icon controls over a dark bottom gradient, a remote-focusable timeline, and a scrollable settings drawer. Left/Right on the timeline previews ten-second seeks; Select confirms. Back first cancels an uncommitted seek, then closes player settings, hides visible controls, and returns to detail. Media keys remain supported. Progress callbacks retain the profile/title/episode captured when playback began.
+Settings → Playback stores Auto / up to 720p / 1080p / 2160p and Autoplay next episode for the active profile. Player Settings includes the same preferences, audio tracks, and subtitles. Playback stays adaptive within supported constraints. The player uses compact icon controls over a dark bottom gradient, a remote-focusable timeline, and a scrollable settings drawer. Left/Right on the timeline previews ten-second seeks; Select confirms. An Episodes action opens a one-third-width list of the current show with per-episode watched progress and a season picker; choosing an episode switches immediately. Back first cancels an uncommitted seek, then closes the episode list, then player settings, hides visible controls, and returns to detail. When an episode ends, progress is saved and a Next episode card counts down five seconds before starting the following episode in season and number order; Play next starts immediately and Cancel or Back dismisses it. A disabled autoplay shows the same card without a countdown. Media keys remain supported. Progress callbacks retain the profile/title/episode captured when playback began.
+
+TV show details list one season at a time through a season picker that opens on the season still being watched. Each episode is a compact row showing its number, title, a watched progress track and the remaining or watched state, so progress is visible without scrolling the whole show.
+
+## Skip segments (IntroDB)
+
+Intro, recap, credits and post-credits timestamps come from the crowdsourced [IntroDB](https://introdb.app) API. Reads are free and anonymous; nothing is sent but an IMDb id, a season and an episode number. Community data is cached per title and merged with locally marked segments, which always take precedence.
+
+Segments appear as lighter bands on the playback timeline. Entering one offers a skip action, both in the transport row and as a persistent button over the video while controls are hidden. When Autoplay next episode is on, an intro is skipped automatically after a moment; turning autoplay off leaves the manual skip buttons in place. A skipped type never re-offers itself during the same playback. Skipping is best-effort: a lookup failure or a title with no data simply plays normally, and a malformed segment that would seek backwards is discarded.
+
+Community data is keyed by IMDb id. The watch page's id is used when the service exposes one; otherwise set it manually under Player Settings → Skip segments → IMDb ID, which is remembered per title. Without an id only locally marked segments apply.
+
+**The Contribution Rule.** If IntroDB has no timestamps for a title, Player Settings → Skip segments lists every segment type with its current range. Choose Mark where a segment starts, then Mark end where it finishes; the mark applies to the current playback immediately and can be cleared or replaced.
+
+Contributing needs an IntroDB API key, supplied at build time through the `TV_INTRODB_API_KEY` environment variable rather than entered on the TV. The same variable is a repository secret for release builds. A build without the key still reads segments, marks timestamps and skips normally; only Contribute to IntroDB is disabled, and both screens state which mode the build is in. Contributing is also refused when the IMDb id is missing. Never commit the key, and never ship it inside a personal debug build.
+
+Because the key is compiled into the APK, anyone with the released file can extract it. Use a dedicated IntroDB key for this client so it can be revoked without affecting your main account, and note that IntroDB requires submissions to be attributable to their user.
+
+IntroDB models intro, recap, outro (credits) and post-credits only. It has no next-episode preview type, so a preview cannot be fetched or contributed.
 
 Access errors distinguish required sign-in, expired sessions, VIP restrictions, denied access, temporary service outages, unsupported decoding, and unknown response structure. Recognized access failures are not treated as broken parsers. Sign-in launched from playback retains the selected title and episode. Guest playback remains available when authorized by the service.
 
 ## Releases and problem reports
 
-GitHub Actions verifies unit tests, lint, debug builds, and notification tests. Stable `vMAJOR.MINOR.PATCH` tags build using the existing release key and publish `app-release.apk` plus `release.json`. CI version codes are `100 + GITHUB_RUN_NUMBER`; commit SHA is embedded in the APK. Configure repository secrets `TV_KEYSTORE_BASE64`, `TV_STORE_PASSWORD`, `TV_KEY_PASSWORD`, and `TV_KEY_ALIAS`. Keys never belong in the source tree. Keep the original private key backed up.
+GitHub Actions verifies unit tests, lint, debug builds, and notification tests. Stable `vMAJOR.MINOR.PATCH` tags build using the existing release key and publish `app-release.apk` plus `release.json`. CI version codes are `100 + GITHUB_RUN_NUMBER`; commit SHA is embedded in the APK. Configure repository secrets `TV_KEYSTORE_BASE64`, `TV_STORE_PASSWORD`, `TV_KEY_PASSWORD`, `TV_KEY_ALIAS`, and optionally `TV_INTRODB_API_KEY` to enable contributing skip timestamps from release builds. Keys never belong in the source tree. Keep the original private key backed up.
 
 A push to `main` verifies source but does not publish an APK. After verification, push an increasing stable version tag to run the release job. The updater installs published stable releases, not unreleased commits. A downloaded update is announced outside playback even when Android installation permission still needs to be enabled; Later keeps it available in Settings.
 

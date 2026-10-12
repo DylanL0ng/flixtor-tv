@@ -3,17 +3,26 @@ package dev.personal.flixtortv
 import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
+import java.security.MessageDigest
 import java.util.UUID
+
+/** PINs are four digits, stored only as a salted digest. */
+internal object ProfilePin {
+    const val LENGTH = 4
+    fun digest(id: String, pin: String): String =
+        MessageDigest.getInstance("SHA-256").digest("$id:$pin".toByteArray())
+            .joinToString("") { "%02x".format(it) }
+}
 
 // These bounded writes must finish before marking migration complete or switching libraries.
 @android.annotation.SuppressLint("ApplySharedPref")
 class ProfileStore(private val context: Context) {
     private val prefs = context.getSharedPreferences("profiles", Context.MODE_PRIVATE)
+    private fun profile(value: JSONObject) = Profile(value.getString("id"), value.getString("name"),
+        value.optInt("avatar"), value.optInt("quality"), value.optBoolean("autoplay", true), value.optString("pin"))
     fun all(): List<Profile> = try {
         val array = JSONArray(prefs.getString("items", "[]"))
-        (0 until array.length()).map { array.getJSONObject(it) }.map {
-            Profile(it.getString("id"), it.getString("name"), it.optInt("avatar"), it.optInt("quality"))
-        }
+        (0 until array.length()).map { array.getJSONObject(it) }.map(::profile)
     } catch (_: Exception) { emptyList() }
     fun initialize(): List<Profile> {
         if (all().isEmpty()) write(listOf(Profile("default", context.getString(R.string.default_profile))))
@@ -30,6 +39,7 @@ class ProfileStore(private val context: Context) {
     private fun write(profiles: List<Profile>) {
         check(prefs.edit().putString("items", JSONArray(profiles.map {
             JSONObject().put("id", it.id).put("name", it.name).put("avatar", it.avatar).put("quality", it.quality)
+                .put("autoplay", it.autoplay).put("pin", it.pin)
         }).toString()).commit())
     }
     fun save(id: String?, name: String, avatar: Int): List<Profile> {
@@ -45,6 +55,25 @@ class ProfileStore(private val context: Context) {
         require(height in listOf(0, 720, 1080, 2160))
         write(all().map { if (it.id == id) it.copy(quality = height) else it })
         return all()
+    }
+    fun autoplay(id: String, enabled: Boolean): List<Profile> {
+        write(all().map { if (it.id == id) it.copy(autoplay = enabled) else it })
+        return all()
+    }
+    /** A blank pin removes an existing lock. Returns the stored list. */
+    fun pin(id: String, value: String?): List<Profile> {
+        val clean = value?.trim().orEmpty()
+        require(clean.isEmpty() || (clean.length == ProfilePin.LENGTH && clean.all(Char::isDigit)))
+        write(all().map { if (it.id == id) it.copy(pin = if (clean.isEmpty()) "" else ProfilePin.digest(id, clean)) else it })
+        return all()
+    }
+    fun unlock(id: String, pin: String): Boolean {
+        val profile = all().firstOrNull { it.id == id } ?: return false
+        if (!profile.locked) return true
+        val candidate = pin.filter(Char::isDigit)
+        if (candidate.length != ProfilePin.LENGTH) return false
+        // Constant-time compare so a wrong PIN cannot be narrowed digit by digit.
+        return MessageDigest.isEqual(ProfilePin.digest(id, candidate).toByteArray(), profile.pin.toByteArray())
     }
     fun delete(id: String): List<Profile> {
         val profiles = all()

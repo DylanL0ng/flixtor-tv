@@ -182,7 +182,7 @@ The translucent rounded rail combines brand and destination actions. A compact a
 
 ### Profiles and Account
 
-The chooser pairs distinct illustrated avatars with native name actions in a scrolling row. Up to seven profiles share one device service login; personal watchlist, progress and maximum quality remain profile-specific. Settings surfaces service status and recovery actions near the top. Do not imply separate service credentials for each avatar.
+The chooser pairs distinct illustrated avatars with native name actions in a scrolling row. Up to seven profiles share one device service login; personal watchlist, progress, maximum quality, autoplay preference and optional PIN remain profile-specific. A PIN-protected profile is labelled and opens a remote keypad dialog rather than the profile; wrong digits clear and explain themselves. Settings surfaces service status and recovery actions near the top. Do not imply separate service credentials for each avatar.
 
 **The Account Evidence Rule.** Authentication and entitlement are separate. When a session is signed in but entitlement is unconfirmed, the navigation badge reads Signed in in muted text. Settings repeats Signed in in cyan, explains that VIP access is unconfirmed and provides Refresh account status. Confirmed VIP gets the VIP badge; never infer it from marketing or menu copy. The client checks the signed-in home response, then the account page's observed membership status. Parsing a live status marker is evidence for that state, not a substitute for upgraded physical-TV acceptance.
 
@@ -190,7 +190,21 @@ The chooser pairs distinct illustrated avatars with native name actions in a scr
 
 Media3 supplies playback and tracks; `PlayerView`'s controller is disabled. Compose supplies the bottom controls: compact title, optional episode label, focusable seek timeline, elapsed/remaining time and icon transport. Icons are drawn shapes, not text glyphs. Transport uses the recorded square target and switches from transparent/white to white/midnight on focus. Timeline focus thickens the track and exposes a cyan thumb; a seek preview must be committed or cancelled.
 
-Vertical drawer choices cover quality, audio and subtitles, with a Back action at entry. Closing the drawer returns focus to Settings. Back cancels an active seek preview, otherwise closes settings, hides controls, then exits playback. Captions use Android subtitle styling in their dedicated viewport. Control visibility and caption positioning must remain coordinated.
+Vertical drawer choices cover quality, audio, subtitles and autoplay, with a Back action at entry. Closing the drawer returns focus to Settings. Back cancels an active seek preview, otherwise closes the episode list, then settings, hides controls, then exits playback. Captions use Android subtitle styling in their dedicated viewport. Control visibility and caption positioning must remain coordinated.
+
+**The Continue Watching Rule.** An Episodes transport action opens a one-third-width drawer over the video listing the current show with per-episode watched progress and a season picker; selecting an episode starts it immediately. Closing returns focus to the Episodes action. Ending an episode saves progress and raises a centred Next episode card with Play next, Cancel and Back, counting down five seconds before autoplay when the profile enables it. The card replaces transport until dismissed; autoplay off shows it without a countdown. Episodes always advance in season then number order, never in the service's newest-first listing.
+
+### Episodes
+
+Episode rows are one shared component across detail and the player drawer: episode number, title, a 4dp watched track and a short remaining/watched label. The current episode is tinted and announced as Now playing. Detail shows a single season chosen by a season picker that opens on the season still being watched, so the list never requires scrolling an entire show to find progress.
+
+### Skip Segments
+
+IntroDB supplies intro, recap, credits and post-credits ranges for an episode or film. Marks are drawn as lighter bands on the timeline, so available skips are visible without opening anything. Entering a segment offers a skip in transport and as a persistent button over the video while controls are hidden; automatic skipping follows the profile's autoplay preference, and a type never re-offers itself once used.
+
+**The Contribution Rule.** Every segment type lists its current range in Player Settings → Skip segments. Mark captures the current playback position, Mark end captures the finish, and the mark applies immediately. Community data needs an IMDb id, taken from the watch page when present or entered manually and remembered per title; it is never guessed. Locally marked ranges always override community data. Contributing needs an IntroDB key supplied by the build through `TV_INTRODB_API_KEY`; it is never entered on device and never a per-profile setting. Reading segments needs no authentication. A keyless build reads, marks and skips normally and only disables contributing, and each screen states which mode it is in. Skipping is best-effort throughout: a failed lookup, a missing id or an unusable range degrades to normal playback rather than an error.
+
+IntroDB has no next-episode preview type, so the client neither fetches nor offers one.
 
 ### Dialogs
 

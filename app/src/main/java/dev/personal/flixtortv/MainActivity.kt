@@ -9,6 +9,7 @@ import androidx.activity.viewModels
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -30,9 +31,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -48,6 +52,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -56,6 +61,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.*
 import coil.ImageLoader
 import coil.compose.AsyncImage
+import coil.compose.rememberAsyncImagePainter
 import coil.disk.DiskCache
 import coil.memory.MemoryCache
 import com.google.zxing.BarcodeFormat
@@ -122,32 +128,37 @@ class MainActivity : ComponentActivity() {
     val saveable = key(state.profile?.id) { rememberSaveableStateHolder() }
     var returnFromFit by remember { mutableStateOf(false) }
     val fitFocus = remember { FocusRequester() }
+    val accountContentFocus = remember { FocusRequester() }
+    var accountContentFocused by remember { mutableStateOf(false) }
     LaunchedEffect(fitting) {
         if (!fitting && returnFromFit && state.screen == Screen.ACCOUNT) {
             fitFocus.requestFocus(); returnFromFit = false
         }
     }
     BoxWithConstraints(Modifier.fillMaxSize().background(Midnight)) {
-        val safe = PaddingValues(horizontal = maxWidth * (state.screenFit.horizontal / 100f),
+        val configuredSafe = PaddingValues(horizontal = maxWidth * (state.screenFit.horizontal / 100f),
             vertical = maxHeight * (state.screenFit.vertical / 100f))
-        val backdrop = when (state.screen) {
-            Screen.HOME -> state.shelves.firstOrNull()?.titles?.firstOrNull()?.backdrop
-            Screen.DETAIL -> state.detail?.title?.backdrop
-            else -> null
-        }
-        if (!backdrop.isNullOrBlank()) {
-            AsyncImage(backdrop, null, imageLoader = images, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-            Box(Modifier.fillMaxSize().background(Midnight.copy(alpha = 0.88f)))
-        }
+        val safe = if (state.screenFit == ScreenFit()) PaddingValues(horizontal = 14.dp, vertical = 12.dp) else configuredSafe
+
         if (!fitting) CompositionLocalProvider(LocalSafePadding provides safe) {
-        Column(Modifier.fillMaxSize().then(if (state.screen == Screen.PLAYER) Modifier else Modifier.padding(safe))) {
-        if (state.screen !in listOf(Screen.PROFILES, Screen.PLAYER, Screen.DETAIL)) Navigation(state, state.focusedKey == null && !returnFromFit, vm::navigate)
+        Row(Modifier.fillMaxSize().then(if (state.screen == Screen.PLAYER) Modifier else Modifier.padding(safe))
+            .onPreviewKeyEvent { event ->
+                if (state.screen == Screen.ACCOUNT && !accountContentFocused &&
+                    event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN &&
+                    event.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_DPAD_RIGHT) {
+                    accountContentFocus.requestFocus()
+                    true
+                } else false
+            }) {
+        if (state.screen !in listOf(Screen.PROFILES, Screen.PLAYER, Screen.DETAIL))
+            Navigation(state, state.focusedKey == null && !returnFromFit, vm::navigate, accountContentFocus)
+        Column(Modifier.weight(1f).fillMaxHeight()) {
         if (state.failure == Failure.CHANGED && state.screen != Screen.PLAYER) StructuralRecovery(vm)
         if (state.failure in listOf(Failure.CAPACITY, Failure.VIP, Failure.SIGNED_OUT, Failure.EXPIRED) &&
             state.screen !in listOf(Screen.PLAYER, Screen.ACCOUNT)) {
             Action(stringResource(if (state.account.signedIn) R.string.check_account else R.string.sign_in)) { vm.navigate(Screen.ACCOUNT) }
         }
-        saveable.SaveableStateProvider(state.screen.name) {
+        Box(Modifier.weight(1f).fillMaxWidth()) { saveable.SaveableStateProvider(state.screen.name) {
             when (state.screen) {
                 Screen.PROFILES -> ProfilesScreen(state, vm)
                 Screen.PLAYER -> {
@@ -167,9 +178,11 @@ class MainActivity : ComponentActivity() {
                 Screen.MOVIES, Screen.SHOWS -> Browse(state, images, vm)
                 Screen.SEARCH -> Search(state, images, vm)
                 Screen.LIST -> Library(state, images, vm)
-                Screen.ACCOUNT -> AccountScreen(state, vm, fitFocus) { fitting = true }
+                Screen.ACCOUNT -> AccountScreen(state, vm, fitFocus, accountContentFocus,
+                    onContentFocusChanged = { accountContentFocused = it }) { fitting = true }
                 Screen.DETAIL -> DetailScreen(state, images, vm)
             }
+        } }
         }
         }
         }
@@ -178,7 +191,7 @@ class MainActivity : ComponentActivity() {
             UpdateReadyDialog(updateState.version, { showUpdatePrompt = false }) {
                 showUpdatePrompt = false
                 (context as? MainActivity)?.installUpdate()
-            }
+        }
             }
         }
         if (confirmingExit) CompositionLocalProvider(LocalSafePadding provides safe) {
@@ -188,122 +201,283 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@Composable private fun Navigation(state: TvState, restore: Boolean, navigate: (Screen) -> Unit) {
-    val active = state.screen
+@Composable private fun Navigation(state: TvState, restore: Boolean, navigate: (Screen) -> Unit,
+    accountContentFocus: FocusRequester) {
+    val active = if (state.screen == Screen.DETAIL) Screen.HOME else state.screen
     val focus = remember { FocusRequester() }
-    LaunchedEffect(active) { if (restore) focus.requestFocus() }
-    Column(Modifier.fillMaxWidth()) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 6.dp)
-        .background(Panel, RoundedCornerShape(16.dp)).border(1.dp, Accent.copy(alpha = 0.16f), RoundedCornerShape(16.dp))
-        .padding(horizontal = 8.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(stringResource(R.string.brand), color = Accent, fontSize = 20.sp, fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(end = 4.dp))
-        listOf(Screen.HOME to R.string.home, Screen.MOVIES to R.string.movies, Screen.SHOWS to R.string.shows,
-            Screen.SEARCH to R.string.search, Screen.LIST to R.string.my_list, Screen.ACCOUNT to R.string.settings,
-            Screen.PROFILES to R.string.profiles).forEach { (screen, label) ->
-            Button(onClick = { navigate(screen) }, modifier = Modifier.heightIn(min = 48.dp)
-                .then(if (active == screen) Modifier.focusRequester(focus) else Modifier),
-                colors = ButtonDefaults.colors(containerColor = if (active == screen) Panel else Color.Transparent,
-                    focusedContainerColor = Accent, focusedContentColor = Midnight)) {
-                Text(stringResource(label), fontSize = 14.sp)
+    LaunchedEffect(state.screen, restore) { if (restore && state.screen != Screen.DETAIL) focus.requestFocus() }
+    // Sidebar: narrow glass column matching the reference's deep navy-purple rail
+    Box(
+        Modifier
+            .width(70.dp)
+            .fillMaxHeight()
+            .padding(end = 14.dp)
+    ) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(NavSurface, RoundedCornerShape(RadiusLarge.dp))
+                .border(1.dp, GlassBorder, RoundedCornerShape(RadiusLarge.dp))
+        ) {
+            Column(
+                Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                // Brand wordmark
+                Text(
+                    stringResource(R.string.brand),
+                    color = Accent,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.2.sp,
+                    maxLines = 1,
+                    modifier = Modifier.padding(top = 16.dp, bottom = 32.dp),
+                )
+                val destinations = listOf(
+                    Triple(Screen.HOME, R.string.home, 0),
+                    Triple(Screen.SEARCH, R.string.search, 1),
+                    Triple(Screen.MOVIES, R.string.movies, 2),
+                    Triple(Screen.SHOWS, R.string.shows, 3),
+                    Triple(Screen.LIST, R.string.my_list, 4),
+                    Triple(Screen.PROFILES, R.string.profiles, 5),
+                )
+                LazyColumn(
+                    Modifier.weight(1f).fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    items(destinations, key = { it.first.name }) { (screen, label, icon) ->
+                        RailDestination(
+                            screen == active, stringResource(label), icon,
+                            Modifier.then(if (screen == active) Modifier.focusRequester(focus) else Modifier),
+                        ) { navigate(screen) }
+                    }
+                }
+                RailDestination(
+                    active == Screen.ACCOUNT, stringResource(R.string.settings), 6,
+                    Modifier.then(if (active == Screen.ACCOUNT) Modifier.focusRequester(focus)
+                        .focusProperties { right = accountContentFocus }
+                        .onPreviewKeyEvent { event ->
+                            if (event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN &&
+                                event.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_DPAD_RIGHT) {
+                                accountContentFocus.requestFocus(); true
+                            } else false
+                        } else Modifier),
+                ) { navigate(Screen.ACCOUNT) }
+                Spacer(Modifier.height(16.dp))
             }
         }
     }
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-        Text(accountLabel(state.account), color = if (state.account.status == AccountStatus.VIP) Accent else Muted,
-            fontSize = 13.sp, modifier = Modifier.padding(end = 8.dp, bottom = 4.dp))
+}
+
+@Composable private fun RailDestination(selected: Boolean, label: String, icon: Int, modifier: Modifier = Modifier,
+    onFocusChanged: ((Boolean) -> Unit)? = null, onClick: () -> Unit) {
+    FocusFrame(
+        modifier.size(44.dp).onFocusChanged { onFocusChanged?.invoke(it.isFocused) },
+        radius = RadiusMedium.dp,
+        restingFill = if (selected) GlassLight else Color.Transparent,
+        contentDescription = label,
+        onClick = onClick,
+    ) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            // Left edge accent bar for the selected state
+            if (selected) Box(
+                Modifier
+                    .align(Alignment.CenterStart)
+                    .width(2.5.dp)
+                    .height(22.dp)
+                    .background(Accent, RoundedCornerShape(2.dp)),
+            )
+            RailIcon(icon, selected)
+        }
     }
+}
+
+@Composable private fun RailIcon(kind: Int, selected: Boolean) {
+    val ink = if (selected) TextPrimary else TextSecondary
+    Canvas(Modifier.size(18.dp)) {
+        val x = size.width; val y = size.height; val stroke = 1.8.dp.toPx()
+        when (kind) {
+            0 -> {
+                val p = androidx.compose.ui.graphics.Path().apply {
+                    moveTo(x * .12f, y * .48f); lineTo(x * .5f, y * .12f); lineTo(x * .88f, y * .48f)
+                    lineTo(x * .8f, y * .48f); lineTo(x * .8f, y * .88f); lineTo(x * .58f, y * .88f)
+                    lineTo(x * .58f, y * .62f); lineTo(x * .42f, y * .62f); lineTo(x * .42f, y * .88f)
+                    lineTo(x * .2f, y * .88f); lineTo(x * .2f, y * .48f); close()
+                }; drawPath(p, ink)
+            }
+            1 -> { drawCircle(ink, x * .29f, Offset(x * .42f, y * .42f), style = androidx.compose.ui.graphics.drawscope.Stroke(stroke)); drawLine(ink, Offset(x * .63f, y * .63f), Offset(x * .92f, y * .92f), stroke) }
+            2 -> { drawRect(ink, Offset(x * .16f, y * .12f), androidx.compose.ui.geometry.Size(x * .68f, y * .76f), style = androidx.compose.ui.graphics.drawscope.Stroke(stroke)); for (i in 0..2) { drawLine(ink, Offset(x * (.3f + i * .2f), y * .14f), Offset(x * (.3f + i * .2f), y * .86f), stroke); drawCircle(ink, stroke * .65f, Offset(x * .22f, y * (.28f + i * .22f))); drawCircle(ink, stroke * .65f, Offset(x * .78f, y * (.28f + i * .22f))) } }
+            3 -> { drawRoundRect(ink, Offset(x * .1f, y * .25f), androidx.compose.ui.geometry.Size(x * .8f, y * .56f), androidx.compose.ui.geometry.CornerRadius(stroke * 2), style = androidx.compose.ui.graphics.drawscope.Stroke(stroke)); drawLine(ink, Offset(x * .35f, y * .13f), Offset(x * .5f, y * .25f), stroke); drawLine(ink, Offset(x * .65f, y * .13f), Offset(x * .5f, y * .25f), stroke); drawLine(ink, Offset(x * .35f, y * .83f), Offset(x * .35f, y * .94f), stroke); drawLine(ink, Offset(x * .65f, y * .83f), Offset(x * .65f, y * .94f), stroke) }
+            4 -> { drawRect(ink, Offset(x * .15f, y * .14f), androidx.compose.ui.geometry.Size(x * .7f, y * .72f), style = androidx.compose.ui.graphics.drawscope.Stroke(stroke)); drawLine(ink, Offset(x * .15f, y * .38f), Offset(x * .85f, y * .38f), stroke); drawLine(ink, Offset(x * .15f, y * .62f), Offset(x * .85f, y * .62f), stroke) }
+            5 -> { drawCircle(ink, x * .18f, Offset(x * .5f, y * .32f), style = androidx.compose.ui.graphics.drawscope.Stroke(stroke)); drawArc(ink, 180f, 180f, false, Offset(x * .12f, y * .46f), androidx.compose.ui.geometry.Size(x * .76f, y * .48f), style = androidx.compose.ui.graphics.drawscope.Stroke(stroke)) }
+            else -> { drawCircle(ink, x * .28f, Offset(x * .5f, y * .5f), style = androidx.compose.ui.graphics.drawscope.Stroke(stroke)); drawCircle(ink, stroke, Offset(x * .5f, y * .5f)); for (a in 0..7) { val angle = Math.PI * a / 4; drawLine(ink, Offset(x * (.5f + .31f * kotlin.math.cos(angle).toFloat()), y * (.5f + .31f * kotlin.math.sin(angle).toFloat())), Offset(x * (.5f + .46f * kotlin.math.cos(angle).toFloat()), y * (.5f + .46f * kotlin.math.sin(angle).toFloat())), stroke) } }
+        }
     }
 }
 
 @Composable private fun Home(s: TvState, images: ImageLoader, vm: TvViewModel) {
     if (s.shelves.isEmpty()) {
-        Column(Modifier.padding(12.dp)) { if (s.loading) Loading(); s.failure?.let { FailureMessage(it, vm::refresh) } }
+        GlassSurface(Modifier.fillMaxWidth().padding(24.dp)) {
+            if (s.loading) Loading()
+            s.failure?.let { FailureMessage(it, vm::refresh) }
+        }
         return
     }
-    LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(28.dp), contentPadding = PaddingValues(bottom = 36.dp)) {
-        item(key = "hero") { Hero(s.shelves.first().titles.first(), images, restore = s.focusedKey == "hero") { vm.openFrom(it, "hero") } }
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+    val compact = maxHeight < 420.dp
+    // Hero fills ~62% of screen height — dominant, like the reference
+    val heroHeight = if (compact) maxHeight * .52f else maxHeight * .62f
+    LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(if (compact) 12.dp else 20.dp),
+        contentPadding = PaddingValues(bottom = 28.dp)) {
+        item(key = "hero") {
+            Box {
+                Hero(s.shelves.first().titles.first(), images = images, restore = s.focusedKey == "hero",
+                    heroHeight = heroHeight, play = vm::playTitle) { vm.openFrom(it, "hero") }
+                // Pagination dots — bottom-right of hero
+                if (!compact) {
+                    val dotCount = s.shelves.firstOrNull()?.titles?.size?.coerceAtMost(5) ?: 1
+                    Row(
+                        Modifier.align(Alignment.BottomEnd).padding(end = 24.dp, bottom = 18.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        repeat(dotCount) { index ->
+                            val isActive = index == 0
+                            Box(Modifier
+                                .then(if (isActive) Modifier.width(22.dp).height(6.dp) else Modifier.size(6.dp))
+                                .background(if (isActive) TextPrimary else TextPrimary.copy(alpha = .38f), RoundedCornerShape(3.dp)))
+                        }
+                    }
+                }
+            }
+        }
         if (s.failure != null) item { Box(Modifier.padding(horizontal = 8.dp)) { FailureMessage(s.failure, vm::refresh) } }
         val continuing = s.viewing.filter { it.position > 1000 && (it.duration <= 0 || it.position < it.duration - 30000) }
             .distinctBy { it.title.key }
         if (continuing.isNotEmpty()) item(key = "continue") {
-            ShelfView(stringResource(R.string.continue_watching), "continue", continuing.map { it.title }, images, s.focusedKey) { vm.openFrom(it, "continue:${it.key}") }
+            ShelfView(stringResource(R.string.continue_watching), "continue", continuing.map { it.title },
+                images, s.focusedKey, landscape = false,
+                posterWidth = if (compact) 80.dp else 120.dp) { vm.openFrom(it, "continue:${it.key}") }
         }
         items(s.shelves, key = { it.label }) { shelf ->
             val label = when (shelf.label) { "movies" -> R.string.new_movies; "shows" -> R.string.new_shows;
                 "episodes" -> R.string.new_episodes; else -> R.string.popular }
-            ShelfView(stringResource(label), shelf.label, shelf.titles, images, s.focusedKey) { vm.openFrom(it, "${shelf.label}:${it.key}") }
+            // First shelf uses square cards; subsequent shelves use wider landscape/cinematic cards
+            val isFirstShelf = shelf == s.shelves.firstOrNull()
+            ShelfView(stringResource(label), shelf.label, shelf.titles, images, s.focusedKey,
+                landscape = !isFirstShelf,
+                selectedKey = if (s.focusedKey == null && isFirstShelf) shelf.titles.firstOrNull()?.key else null,
+                posterWidth = if (compact) 80.dp else if (isFirstShelf) 148.dp else 220.dp) {
+                vm.openFrom(it, "${shelf.label}:${it.key}")
+            }
         }
+    }
     }
 }
 
 @Composable private fun Hero(title: Title, images: ImageLoader, showAction: Boolean = true,
-    showSynopsis: Boolean = true, restore: Boolean = false, open: (Title) -> Unit) {
+    showSynopsis: Boolean = true, restore: Boolean = false, heroHeight: Dp? = null,
+    play: ((Title) -> Unit)? = null, open: (Title) -> Unit) {
     val focus = remember { FocusRequester() }
     LaunchedEffect(restore) { if (restore && showAction) focus.requestFocus() }
-    Box(Modifier.fillMaxWidth().height(248.dp)) {
-        AsyncImage(title.backdrop.ifBlank { title.poster }, null, imageLoader = images,
-            contentScale = ContentScale.Crop, alignment = Alignment.TopCenter,
-            modifier = Modifier.fillMaxHeight().fillMaxWidth(0.62f).align(Alignment.CenterEnd))
-        Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(listOf(Midnight, Midnight.copy(alpha = 0.92f), Color.Transparent))))
-        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Midnight))))
-        Column(Modifier.padding(start = 8.dp, top = 22.dp, end = 32.dp).widthIn(max = 500.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(title.name, fontSize = 34.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Text(listOf(title.year, title.genres, if (title.rating.isNotBlank()) stringResource(R.string.rating, title.rating) else "")
-                .filter(String::isNotBlank).joinToString(" · "), color = Muted, fontSize = 15.sp)
-            if (showSynopsis && title.synopsis.isNotBlank()) Text(title.synopsis, maxLines = 3, overflow = TextOverflow.Ellipsis, fontSize = 15.sp, color = Muted)
-            if (showAction) Action(stringResource(R.string.details), modifier = Modifier.focusRequester(focus)) { open(title) }
+    val metadata = listOf(title.year, title.genres)
+    // Use backdrop if available (detail page), fall back to poster for shelf items
+    val imageUrl = title.backdrop.ifBlank { title.poster }
+    val painter = rememberAsyncImagePainter(imageUrl.takeIf { it.isNotBlank() }, imageLoader = images)
+    HeroBanner(
+        title.name,
+        background = if (imageUrl.isNotBlank()) painter else null,
+        metadata,
+        if (showSynopsis) title.synopsis else "",
+        Modifier.fillMaxWidth().height(heroHeight ?: if (showAction) 300.dp else 240.dp),
+        contentOffsetY = if (showAction) 24.dp else 0.dp,
+        isNew = showAction,
+        ageRating = if (title.rating.isNotBlank()) title.rating else "",
+    ) {
+        if (showAction) {
+            GlassButton(stringResource(R.string.play), modifier = Modifier.focusRequester(focus),
+                variant = GlassButtonVariant.PRIMARY, icon = { HeroActionIcon(play = true) }) { play?.invoke(title) ?: open(title) }
+            GlassButton(stringResource(R.string.details), icon = { HeroActionIcon(play = false) }) { open(title) }
         }
     }
 }
 
-@Composable private fun ShelfView(label: String, location: String, titles: List<Title>, images: ImageLoader, focused: String?, open: (Title) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        Text(label, modifier = Modifier.padding(start = 8.dp), fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(18.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)) {
-            items(titles, key = Title::key) { Poster(it, images, focused == "$location:${it.key}", open) }
+@Composable private fun HeroActionIcon(play: Boolean) {
+    Canvas(Modifier.size(18.dp)) {
+        if (play) {
+            val path = androidx.compose.ui.graphics.Path().apply {
+                moveTo(size.width * .28f, size.height * .16f)
+                lineTo(size.width * .82f, size.height * .5f)
+                lineTo(size.width * .28f, size.height * .84f)
+                close()
+            }
+            drawPath(path, TextPrimary)
+        } else {
+            drawCircle(TextPrimary, radius = size.minDimension * .43f,
+                style = androidx.compose.ui.graphics.drawscope.Stroke(1.8.dp.toPx()))
+            drawCircle(TextPrimary, radius = 1.2.dp.toPx(), center = Offset(size.width * .5f, size.height * .32f))
+            drawLine(TextPrimary, Offset(size.width * .5f, size.height * .48f),
+                Offset(size.width * .5f, size.height * .72f), 1.8.dp.toPx())
         }
     }
 }
 
-@Composable private fun Poster(title: Title, images: ImageLoader, restore: Boolean, open: (Title) -> Unit) {
+@Composable private fun ShelfView(label: String, location: String, titles: List<Title>, images: ImageLoader,
+    focused: String?, selectedKey: String? = null, landscape: Boolean = false, posterWidth: Dp = 148.dp,
+    open: (Title) -> Unit) {
+    // Square cards for "Popular now", widescreen cards for "Trending" / secondary shelves
+    val aspectRatio = if (landscape) 16f / 9f else 1f
+    ContentRail(label, titles, itemKey = Title::key, contentPadding = PaddingValues(horizontal = 2.dp, vertical = 0.dp)) { title ->
+        val isSelected = focused == "$location:${title.key}" || selectedKey == title.key
+        Column(Modifier.width(posterWidth)) {
+            Poster(title, images, isSelected, open,
+                showLabels = false, aspectRatio = aspectRatio, titleOverlay = true)
+        }
+    }
+}
+
+@Composable private fun Poster(title: Title, images: ImageLoader, restore: Boolean, open: (Title) -> Unit,
+    showLabels: Boolean = true, aspectRatio: Float = 2f / 3f, titleOverlay: Boolean = false) {
     val focus = remember { FocusRequester() }
     LaunchedEffect(restore) { if (restore) focus.requestFocus() }
-    Surface(onClick = { open(title) }, modifier = Modifier.width(120.dp).focusRequester(focus),
-        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(10.dp)),
-        colors = ClickableSurfaceDefaults.colors(containerColor = Panel, focusedContainerColor = Accent,
-            contentColor = Color.White, focusedContentColor = Midnight)) {
-        Column {
-            val description = stringResource(R.string.poster_description, title.name)
-            Box(Modifier.fillMaxWidth().aspectRatio(2f / 3f)) {
-                Text(title.name, modifier = Modifier.padding(12.dp), fontSize = 14.sp, maxLines = 4)
-                AsyncImage(title.poster, description, imageLoader = images, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-            }
-            Text(title.name, modifier = Modifier.padding(start = 9.dp, end = 9.dp, top = 8.dp), maxLines = 1,
-                overflow = TextOverflow.Ellipsis, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-            Text(title.year, modifier = Modifier.padding(start = 9.dp, bottom = 9.dp, top = 2.dp), fontSize = 11.sp)
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        val description = stringResource(R.string.poster_description, title.name)
+        MediaPoster(title.name, rememberAsyncImagePainter(title.poster, imageLoader = images),
+            modifier = Modifier.fillMaxWidth().focusRequester(focus), contentDescription = description,
+            aspectRatio = aspectRatio, selected = restore, titleOverlay = titleOverlay,
+            onClick = { open(title) })
+        if (showLabels) {
+            Text(title.name, modifier = Modifier.padding(horizontal = 3.dp), maxLines = 1,
+                overflow = TextOverflow.Ellipsis, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = TextPrimary)
+            if (title.year.isNotBlank()) Text(title.year, modifier = Modifier.padding(horizontal = 3.dp), fontSize = 11.sp, color = TextMuted)
         }
     }
 }
 
 @Composable private fun Browse(s: TvState, images: ImageLoader, vm: TvViewModel) {
-    Column(Modifier.fillMaxSize().padding(horizontal = 8.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    Column(Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(stringResource(if (s.screen == Screen.SHOWS) R.string.shows else R.string.movies), fontSize = 28.sp, modifier = Modifier.weight(1f))
-            Action(stringResource(R.string.latest)) { vm.sort("latest") }
-            Action(stringResource(R.string.top_rated)) { vm.sort("best") }
+            Text(stringResource(if (s.screen == Screen.SHOWS) R.string.shows else R.string.movies), fontSize = 32.sp,
+                fontWeight = FontWeight.Bold, color = TextPrimary, modifier = Modifier.weight(1f))
+            GlassButton(stringResource(R.string.latest), variant = GlassButtonVariant.SECONDARY) { vm.sort("latest") }
+            GlassButton(stringResource(R.string.top_rated), variant = GlassButtonVariant.SECONDARY) { vm.sort("best") }
         }
         Results(s, images, vm, Modifier.weight(1f)) { vm.browse(true) }
     }
 }
 
 @Composable private fun Search(s: TvState, images: ImageLoader, vm: TvViewModel) {
-    Column(Modifier.fillMaxSize().padding(horizontal = 8.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        Field(stringResource(R.string.search_hint), s.query, { vm.search(it) }, Modifier.fillMaxWidth(0.75f))
+    Column(Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+        Text(stringResource(R.string.search), fontSize = 32.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+        GlassSurface(Modifier.fillMaxWidth(0.76f), radius = RadiusMedium.dp) {
+            Field(stringResource(R.string.search_hint), s.query, { vm.search(it) }, Modifier.fillMaxWidth())
+        }
         if (s.query.isBlank()) {
-            Text(stringResource(R.string.search_intro), fontSize = 30.sp)
-            Text(stringResource(R.string.search_help), color = Muted)
+            GlassSurface(Modifier.fillMaxWidth(0.76f)) {
+                Text(stringResource(R.string.search_intro), fontSize = 26.sp, color = TextPrimary)
+                Text(stringResource(R.string.search_help), color = TextSecondary, modifier = Modifier.padding(top = 10.dp))
+            }
         } else Results(s, images, vm, Modifier.weight(1f)) { vm.search(s.query, true) }
     }
 }
@@ -331,10 +505,12 @@ class MainActivity : ComponentActivity() {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (s.loading) Loading()
         s.failure?.let { FailureMessage(it, vm::refresh) }
-        if (!s.loading && s.failure == null && s.titles.isEmpty()) Text(stringResource(R.string.empty_results), color = Muted)
+        if (!s.loading && s.failure == null && s.titles.isEmpty()) GlassSurface(Modifier.fillMaxWidth(0.8f)) {
+            Text(stringResource(R.string.empty_results), color = TextSecondary, fontSize = 20.sp)
+        }
         LazyVerticalGrid(columns = GridCells.Adaptive(120.dp), state = grid, modifier = Modifier.weight(1f),
-            horizontalArrangement = Arrangement.spacedBy(18.dp), verticalArrangement = Arrangement.spacedBy(20.dp),
-            contentPadding = PaddingValues(vertical = 12.dp)) {
+            horizontalArrangement = Arrangement.spacedBy(20.dp), verticalArrangement = Arrangement.spacedBy(24.dp),
+            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 12.dp)) {
             items(s.titles.size, key = { index -> (s.titles as? CatalogPages.Snapshot)?.key(index) ?: s.titles[index].key }) { index ->
                 val title = s.titles[index]
                 Poster(title, images, s.focusedKey == title.key, vm::open)
@@ -355,11 +531,13 @@ class MainActivity : ComponentActivity() {
 
 @Composable private fun Library(s: TvState, images: ImageLoader, vm: TvViewModel) {
     if (s.favorites.isEmpty()) Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-        Text(stringResource(R.string.empty_list), fontSize = 32.sp)
-        Text(stringResource(R.string.empty_list_help), color = Muted)
-        Action(stringResource(R.string.browse)) { vm.navigate(Screen.HOME) }
-    } else Column(Modifier.fillMaxSize().padding(horizontal = 8.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        Text(stringResource(R.string.my_list), fontSize = 28.sp)
+        GlassSurface(Modifier.fillMaxWidth(0.8f)) {
+            Text(stringResource(R.string.empty_list), fontSize = 28.sp, color = TextPrimary)
+            Text(stringResource(R.string.empty_list_help), color = TextSecondary, modifier = Modifier.padding(top = 10.dp))
+            GlassButton(stringResource(R.string.browse), modifier = Modifier.padding(top = 20.dp), variant = GlassButtonVariant.PRIMARY) { vm.navigate(Screen.HOME) }
+        }
+    } else Column(Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Text(stringResource(R.string.my_list), fontSize = 32.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
         Results(s.copy(titles = s.favorites, hasMore = false, loading = false), images, vm, Modifier.weight(1f)) {}
     }
 }
@@ -367,65 +545,158 @@ class MainActivity : ComponentActivity() {
 @Composable private fun DetailScreen(s: TvState, images: ImageLoader, vm: TvViewModel) {
     val detail = s.detail ?: return
     val title = detail.title
-    val listState = remember(title.key) { LazyListState() }
     val focus = remember(title.key) { FocusRequester() }
     val focusBack = s.loading || s.failure != null || (title.isSeries && detail.episodes.isEmpty())
     LaunchedEffect(title.key, s.loading, s.failure) { focus.requestFocus() }
-    LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = 40.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        item { Box(Modifier.padding(start = 8.dp, top = 16.dp)) {
-            Action(stringResource(R.string.back), modifier = if (focusBack) Modifier.focusRequester(focus) else Modifier) { vm.back() }
-        } }
-        item { Hero(title, images, showAction = false, showSynopsis = false) {} }
-        item {
-            Column(Modifier.padding(horizontal = 8.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                if (s.loading) Loading()
-                s.failure?.let { FailureMessage(it, vm::refresh) }
-                if (title.synopsis.isNotBlank()) Text(title.synopsis, color = Muted, fontSize = 16.sp)
-                Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    if (!title.isSeries && !s.loading && s.failure == null) {
-                        Action(stringResource(R.string.play), modifier = Modifier.focusRequester(focus)) { vm.play(null) }
-                        Action(stringResource(R.string.restart)) { vm.play(null, false) }
-                    }
-                    if (title.isSeries && !focusBack) {
-                        Action(stringResource(R.string.play), modifier = Modifier.focusRequester(focus)) { vm.play(detail.episodes.first()) }
-                    }
-                    Action(stringResource(if (s.favorites.any { it.key == title.key }) R.string.remove_list else R.string.add_list)) { vm.toggle(title) }
+    val seasons = remember(detail.episodes) { detail.episodes.map { it.season }.distinct().sorted() }
+    var picked by remember(title.key) { mutableIntStateOf(0) }
+    val season = if (seasons.contains(picked)) picked else startSeason(s.viewing, title) ?: seasons.firstOrNull() ?: 1
+    val episodes = remember(detail.episodes, season) { detail.episodes.filter { it.season == season }.sortedBy { it.number } }
+    val resume = s.viewing.firstOrNull { it.title.key == title.key && !it.finished }
+
+    // Two-column layout: poster/hero on left, scrollable details on right
+    Row(Modifier.fillMaxSize()) {
+        // ── Left column: hero art + back ──────────────────────────────────────
+        Box(
+            Modifier
+                .fillMaxHeight()
+                .fillMaxWidth(0.38f)
+        ) {
+            // Poster image fills the full left column
+            val imageUrl = title.backdrop.ifBlank { title.poster }
+            if (imageUrl.isNotBlank()) {
+                AsyncImage(
+                    imageUrl, null, imageLoader = images,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                // Right-edge fade so content panel has a clean entry
+                Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(
+                    listOf(Color.Transparent, AppBackground.copy(alpha = .08f), AppBackground.copy(alpha = .72f), AppBackground),
+                    startX = Float.POSITIVE_INFINITY, endX = 0f,
+                )))
+                // Bottom fade
+                Box(Modifier.fillMaxSize().background(Brush.verticalGradient(
+                    listOf(Color.Transparent, Color.Transparent, AppBackground.copy(alpha = .60f), AppBackground),
+                )))
+            }
+            // Back button anchored top-left
+            Box(Modifier.align(Alignment.TopStart).padding(start = 16.dp, top = 16.dp)) {
+                Action(stringResource(R.string.back), modifier = Modifier.focusRequester(focus)) { vm.back() }
+            }
+            // Title + metadata at bottom-left of image
+            Column(
+                Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(start = 20.dp, bottom = 20.dp, end = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                if (title.rating.isNotBlank()) {
+                    Box(
+                        Modifier
+                            .border(1.dp, TextMuted.copy(alpha = .5f), RoundedCornerShape(4.dp))
+                            .padding(horizontal = 8.dp, vertical = 2.dp)
+                    ) { Text(title.rating, color = TextMuted, fontSize = 12.sp, fontWeight = FontWeight.Medium) }
                 }
-                val previous = s.viewing.firstOrNull { it.title.key == title.key && (it.duration <= 0 || it.position < it.duration - 30000) }
-                if (previous != null && !s.loading && s.failure == null) {
-                    Action(stringResource(R.string.remaining, previous.position / 60000, previous.position / 1000 % 60)) { vm.play(previous.episode) }
+                Text(title.name, color = TextPrimary, fontSize = 28.sp, fontWeight = FontWeight.Bold,
+                    lineHeight = 32.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                if (title.year.isNotBlank() || title.genres.isNotBlank()) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        if (title.year.isNotBlank()) Text(title.year, color = TextSecondary, fontSize = 14.sp)
+                        if (title.year.isNotBlank() && title.genres.isNotBlank())
+                            Box(Modifier.size(3.dp).background(TextMuted, RoundedCornerShape(2.dp)))
+                        if (title.genres.isNotBlank()) Text(title.genres, color = TextSecondary, fontSize = 14.sp,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
                 }
             }
         }
-        if (title.isSeries && !s.loading && s.failure == null && detail.episodes.isEmpty()) item { Text(stringResource(R.string.no_episodes), modifier = Modifier.padding(horizontal = 8.dp)) }
-        detail.episodes.groupBy(Episode::season).forEach { (season, episodes) ->
-            item(key = "season:$season") { Text(stringResource(R.string.season, season), modifier = Modifier.padding(start = 8.dp, top = 12.dp), fontSize = 24.sp) }
-            items(episodes, key = Episode::key) { episode ->
-                Box(Modifier.padding(horizontal = 8.dp)) {
-                    Action(stringResource(R.string.episode, episode.number, episode.name), enabled = !s.loading) { vm.play(episode) }
+
+        // ── Right column: actions + episodes ──────────────────────────────────
+        val listState = remember(title.key) { LazyListState() }
+        LazyColumn(
+            Modifier.fillMaxSize(),
+            state = listState,
+            contentPadding = PaddingValues(start = 8.dp, end = 24.dp, top = 24.dp, bottom = 40.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            // Synopsis
+            if (title.synopsis.isNotBlank()) item(key = "synopsis") {
+                Text(title.synopsis, color = TextSecondary, fontSize = 15.sp, lineHeight = 22.sp,
+                    maxLines = 4, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp))
+            }
+            // Loading / failure
+            if (s.loading || s.failure != null) item(key = "status") {
+                if (s.loading) Loading()
+                s.failure?.let { FailureMessage(it, vm::refresh) }
+            }
+            // Action row
+            item(key = "actions") {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(bottom = 8.dp)) {
+                    if (!title.isSeries && !s.loading && s.failure == null) {
+                        GlassButton(stringResource(R.string.play), variant = GlassButtonVariant.PRIMARY,
+                            icon = { HeroActionIcon(play = true) }) { vm.play(null) }
+                        GlassButton(stringResource(R.string.restart)) { vm.play(null, false) }
+                    }
+                    if (title.isSeries && !focusBack) {
+                        val first = detail.ordered.firstOrNull { ep ->
+                            val v = s.viewing.firstOrNull { it.title.key == title.key && it.episode?.key == ep.key }
+                            v == null || !v.finished
+                        } ?: detail.ordered.first()
+                        GlassButton(stringResource(R.string.play), variant = GlassButtonVariant.PRIMARY,
+                            icon = { HeroActionIcon(play = true) }) { vm.play(first) }
+                    }
+                    if (resume != null && !s.loading && s.failure == null) {
+                        GlassButton(stringResource(R.string.remaining, resume.position / 60000, resume.position / 1000 % 60)) { vm.play(resume.episode) }
+                    }
+                    GlassButton(stringResource(if (s.favorites.any { it.key == title.key }) R.string.remove_list else R.string.add_list)) { vm.toggle(title) }
                 }
+            }
+            // Season picker — shown only for multi-season series
+            if (seasons.size > 1) item(key = "seasons") {
+                SeasonPicker(seasons, season, Modifier.fillMaxWidth()) { picked = it }
+            }
+            // No episodes placeholder
+            if (title.isSeries && !s.loading && s.failure == null && detail.episodes.isEmpty()) {
+                item { Text(stringResource(R.string.no_episodes), color = TextSecondary, fontSize = 15.sp,
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp)) }
+            }
+            // Episode list
+            items(episodes, key = Episode::key) { episode ->
+                val viewing = s.viewing.firstOrNull { it.title.key == title.key && it.episode?.key == episode.key }
+                EpisodeRow(episode, viewing, s.episode?.key == episode.key, enabled = !s.loading) { vm.play(episode) }
             }
         }
     }
 }
 
-@Composable private fun AccountScreen(s: TvState, vm: TvViewModel, fitFocus: FocusRequester, fit: () -> Unit) {
+@Composable private fun AccountScreen(s: TvState, vm: TvViewModel, fitFocus: FocusRequester,
+    contentFocus: FocusRequester, onContentFocusChanged: (Boolean) -> Unit, fit: () -> Unit) {
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var passwordLogin by remember { mutableStateOf(false) }
     var confirmClear by remember { mutableStateOf(false) }
     LaunchedEffect(s.account.signedIn) { if (s.account.signedIn) { email = ""; password = ""; passwordLogin = false } }
-    LazyColumn(Modifier.fillMaxSize().padding(horizontal = 8.dp), contentPadding = PaddingValues(bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+    LazyColumn(Modifier.fillMaxSize().onFocusChanged { onContentFocusChanged(it.hasFocus) }
+        .padding(horizontal = 24.dp, vertical = 16.dp), contentPadding = PaddingValues(bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp)) {
         item {
-            Text(stringResource(R.string.settings), fontSize = 30.sp, fontWeight = FontWeight.SemiBold)
-            Text(s.profile?.name.orEmpty(), color = Muted)
-            Action(stringResource(R.string.manage_profiles)) { vm.navigate(Screen.PROFILES) }
+            GlassSurface(Modifier.fillMaxWidth(0.82f)) {
+                Text(stringResource(R.string.settings), fontSize = 30.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+                Text(s.profile?.name.orEmpty(), color = TextSecondary, modifier = Modifier.padding(top = 6.dp))
+                GlassButton(stringResource(R.string.manage_profiles), modifier = Modifier.padding(top = 14.dp)
+                    .focusRequester(contentFocus)) { vm.navigate(Screen.PROFILES) }
+            }
         }
         item {
-            Text(stringResource(R.string.vip_title), fontSize = 30.sp, fontWeight = FontWeight.SemiBold)
-            Text(stringResource(R.string.vip_help), color = Muted, modifier = Modifier.padding(top = 8.dp))
+            GlassSurface(Modifier.fillMaxWidth(0.82f)) {
+                Text(stringResource(R.string.vip_title), fontSize = 26.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+                Text(stringResource(R.string.vip_help), color = TextSecondary, modifier = Modifier.padding(top = 8.dp))
+            }
         }
         item {
+            GlassSurface(Modifier.fillMaxWidth(0.82f)) {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (s.loading) Loading()
                 s.failure?.let { FailureMessage(it, if (s.failure == Failure.EXPIRED) vm::startPairing else vm::refresh) }
@@ -442,41 +713,66 @@ class MainActivity : ComponentActivity() {
                     else if (s.pairing) Loading()
                 }
             }
+            }
         }
         if (!s.account.signedIn && !s.pairing && passwordLogin) item {
-            Column(Modifier.widthIn(max = 480.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Field(stringResource(R.string.email), email, { email = it.take(254) }, keyboard = KeyboardType.Email)
-                Field(stringResource(R.string.password), password, { password = it.take(64) }, password = true)
-                Action(stringResource(R.string.sign_in), enabled = !s.loading && android.util.Patterns.EMAIL_ADDRESS.matcher(email.trim()).matches() && password.length in 8..64) {
-                    vm.login(email, password); password = ""
+            GlassSurface(Modifier.widthIn(max = 560.dp).fillMaxWidth()) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Field(stringResource(R.string.email), email, { email = it.take(254) }, keyboard = KeyboardType.Email)
+                    Field(stringResource(R.string.password), password, { password = it.take(64) }, password = true)
+                    Action(stringResource(R.string.sign_in), enabled = !s.loading && android.util.Patterns.EMAIL_ADDRESS.matcher(email.trim()).matches() && password.length in 8..64) {
+                        vm.login(email, password); password = ""
+                    }
+                    Action(stringResource(R.string.cancel)) { passwordLogin = false; password = "" }
                 }
-                Action(stringResource(R.string.cancel)) { passwordLogin = false; password = "" }
             }
         }
         item {
-            Text(stringResource(R.string.playback_settings), fontSize = 24.sp)
-            QualityOptions(s.profile?.quality ?: 0, vm::setQuality)
+            GlassSurface(Modifier.fillMaxWidth(0.82f)) {
+                Text(stringResource(R.string.playback_settings), fontSize = 24.sp, color = TextPrimary)
+                QualityOptions(s.profile?.quality ?: 0, vm::setQuality)
+                val autoplay = s.profile?.autoplay != false
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Action(if (autoplay) stringResource(R.string.selected_option, stringResource(R.string.autoplay_next))
+                        else stringResource(R.string.autoplay_next)) { vm.setAutoplay(!autoplay) }
+                    Text(stringResource(R.string.autoplay_help), color = TextSecondary)
+                }
+            }
+        }
+        item {
+            GlassSurface(Modifier.fillMaxWidth(0.82f)) {
+                Text(stringResource(R.string.skip_segments), fontSize = 24.sp, color = TextPrimary)
+                Text(stringResource(R.string.introdb_key_help), color = TextSecondary, modifier = Modifier.padding(top = 8.dp))
+                Text(stringResource(if (introDbConfigured) R.string.introdb_key_stored else R.string.introdb_key_unavailable),
+                    color = if (introDbConfigured) Accent else Muted, modifier = Modifier.padding(top = 8.dp))
+            }
         }
         item { UpdateSettings(vm) }
         item {
-            Text(stringResource(R.string.display), fontSize = 24.sp)
-            Action(stringResource(R.string.screen_fit), Modifier.focusRequester(fitFocus), click = fit)
+            GlassSurface(Modifier.fillMaxWidth(0.82f)) {
+                Text(stringResource(R.string.display), fontSize = 24.sp, color = TextPrimary)
+                GlassButton(stringResource(R.string.screen_fit), Modifier.focusRequester(fitFocus), onClick = fit)
+            }
         }
         item {
+            GlassSurface(Modifier.fillMaxWidth(0.82f)) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(stringResource(R.string.local_library), color = Muted)
                 Action(stringResource(R.string.clear_history)) { confirmClear = true }
                 Text(stringResource(R.string.personal_client), color = Muted, fontSize = 12.sp)
             }
+            }
         }
         if (confirmClear) item {
-            Column(Modifier.background(Panel, RoundedCornerShape(12.dp)).padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            GlassSurface(Modifier.fillMaxWidth(0.82f)) {
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Text(stringResource(R.string.clear_history_title), fontSize = 20.sp)
                 Text(stringResource(R.string.clear_history_help), color = Muted)
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     Action(stringResource(R.string.cancel)) { confirmClear = false }
                     Action(stringResource(R.string.clear)) { vm.clearLibrary(); confirmClear = false }
                 }
+            }
             }
         }
     }
@@ -511,17 +807,14 @@ class MainActivity : ComponentActivity() {
             visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
             cursorBrush = Brush.verticalGradient(listOf(Accent, Accent)),
             modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).onFocusChanged { focused = it.isFocused }
-                .background(Panel, RoundedCornerShape(8.dp)).border(if (focused) 2.dp else 1.dp,
-                    if (focused) Accent else Muted.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                .background(GlassMedium, RoundedCornerShape(RadiusSmall.dp)).border(if (focused) 2.dp else 1.dp,
+                    if (focused) GlassBorderStrong else GlassBorder, RoundedCornerShape(RadiusSmall.dp))
                 .padding(14.dp).semantics { contentDescription = label })
     }
 }
 
 @Composable internal fun Action(label: String, modifier: Modifier = Modifier, enabled: Boolean = true, click: () -> Unit) {
-    Button(onClick = click, enabled = enabled, modifier = modifier.heightIn(min = 48.dp),
-        colors = ButtonDefaults.colors(containerColor = Panel, focusedContainerColor = Accent, focusedContentColor = Midnight)) {
-        Text(label, fontSize = 15.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-    }
+    GlassButton(label, modifier, GlassButtonVariant.SECONDARY, enabled, onClick = click)
 }
 
 @Composable internal fun Loading() {

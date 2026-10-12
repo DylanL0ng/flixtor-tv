@@ -29,13 +29,17 @@ data class TvState(
     val failureOperation: String = "HOME",
     val appending: Boolean = false, val appendFailure: Failure? = null, val catalogKey: String = "",
     val screenFit: ScreenFit = ScreenFit(),
+    val segments: Segments? = null, val segmentsLoading: Boolean = false,
 )
 class TvViewModel @JvmOverloads constructor(app: Application,
-    val client: FlixtorClient = FlixtorClient(SessionStore(app))) : AndroidViewModel(app) {
+    val client: FlixtorClient = FlixtorClient(SessionStore(app)),
+    private val introDb: IntroDbClient = IntroDbClient()) : AndroidViewModel(app) {
     val updates = UpdateService(app)
     private val profiles = ProfileStore(app)
     private var library = LibraryStore(app)
     private val fitStore = ScreenFitStore(app)
+    private val skipStore = SkipStore(app)
+    private var segmentsJob: Job? = null
     private val catalogRoot = java.io.File(app.filesDir, "catalog_pages").apply { deleteRecursively(); mkdirs() }
     private var pages = CatalogPages(catalogRoot)
     private var catalogJob: Job? = null
@@ -74,8 +78,8 @@ class TvViewModel @JvmOverloads constructor(app: Application,
     fun fingerprint() = mutable.value.failureOperation.lowercase() + ".response-v1"
     fun report() { viewModelScope.launch { updates.report(mutable.value.failureOperation, fingerprint()) } }
     fun installUpdate() { if (mutable.value.screen != Screen.PLAYER) viewModelScope.launch { updates.install() } }
-    override fun onCleared() { catalogJob?.cancel(); pages.close(); updates.close(); client.close(); super.onCleared() }
-    fun selectProfile(id: String) {
+    override fun onCleared() { catalogJob?.cancel(); segmentsJob?.cancel(); pages.close(); updates.close(); client.close(); super.onCleared() }
+    private fun enter(id: String) {
         val profile = profiles.all().firstOrNull { it.id == id } ?: return
         work?.cancel(); catalogJob?.cancel(); stopPairing(); pendingPlayback = null
         library = LibraryStore(getApplication(), id)
@@ -83,9 +87,119 @@ class TvViewModel @JvmOverloads constructor(app: Application,
             favorites = library.favorites(), viewing = library.viewing(), account = it.account, accountChecked = it.accountChecked, screenFit = it.screenFit) }
         refresh()
     }
+    fun selectProfile(id: String) = enter(id)
+    /** Locked profiles stay on the chooser until the PIN matches. */
+    fun unlockProfile(id: String, pin: String): Boolean {
+        val profile = profiles.all().firstOrNull { it.id == id } ?: return false
+        if (profile.locked && !profiles.unlock(id, pin)) return false
+        enter(id); return true
+    }
     fun saveProfile(id: String?, name: String, avatar: Int) {
         val list = profiles.save(id, name, avatar)
         update { it.copy(profiles = list, profile = list.firstOrNull { p -> p.id == it.profile?.id }) }
+    }
+    fun setProfilePin(id: String, pin: String?) {
+        update { it.copy(profiles = profiles.pin(id, pin)) }
+    }
+    fun setAutoplay(enabled: Boolean) {
+        val id = mutable.value.profile?.id ?: return
+        val list = profiles.autoplay(id, enabled)
+        update { it.copy(profiles = list, profile = list.first { p -> p.id == id }) }
+    }
+    /** The episode after the current one in watch order, or null for films and finales. */
+    fun nextEpisode(): Episode? = mutable.value.detail?.next(mutable.value.episode)
+
+    // --- Skip segments --------------------------------------------------------
+
+    /** Community data needs an IMDb id; without one only viewer-marked segments apply. */
+    fun imdbId(): String? {
+        val title = mutable.value.detail?.title ?: return null
+        return skipStore.imdbId(title)?.takeIf { it.isNotBlank() } ?: title.imdb.takeIf { it.isNotBlank() }
+    }
+
+    fun setImdbId(imdbId: String?) {
+        val title = mutable.value.detail?.title ?: return
+        skipStore.setImdbId(title, imdbId)
+        // A corrected id invalidates what was fetched for the old one.
+        loadSegments()
+    }
+
+    /** Viewer-marked segments always win, then community data fills the gaps. */
+    fun effectiveSegments(): Segments? {
+        val detail = mutable.value.detail ?: return null
+        val marked = skipStore.segments(detail.title, mutable.value.episode)
+        val remote = mutable.value.segments?.items.orEmpty()
+        if (marked.isEmpty() && remote.isEmpty()) return null
+        val merged = SegmentType.entries.mapNotNull { type ->
+            marked.firstOrNull { it.type == type } ?: remote.firstOrNull { it.type == type }
+        }.sortedBy { it.startMs }
+        return Segments(mutable.value.segments?.imdbId ?: detail.title.imdb, merged)
+    }
+
+    fun loadSegments() {
+        val detail = mutable.value.detail ?: return
+        val title = detail.title
+        val episode = mutable.value.episode
+        segmentsJob?.cancel()
+        // Marked segments are local and instant; show them before any network work.
+        update { it.copy(segments = effectiveSegments(), segmentsLoading = false) }
+        val imdbId = imdbId() ?: return
+        segmentsJob = viewModelScope.launch {
+            update { it.copy(segmentsLoading = true) }
+            val fetched = if (title.isSeries) {
+                val current = episode ?: return@launch
+                introDb.segments(imdbId, current.season, current.number)
+            } else introDb.segments(imdbId)
+            ensureActive()
+            // A failed lookup keeps whatever is already shown; skipping is best-effort.
+            update { it.copy(segments = fetched ?: it.segments, segmentsLoading = false) }
+        }
+    }
+
+    fun markSegment(type: SegmentType, startMs: Long, endMs: Long) {
+        val detail = mutable.value.detail ?: return
+        val start = startMs.coerceAtLeast(0)
+        val segment = SkipSegment(type, start, endMs.coerceAtLeast(start + 1000))
+        skipStore.setSegment(detail.title, mutable.value.episode, segment)
+        update { it.copy(segments = effectiveSegments()) }
+    }
+
+    fun clearMarked(type: SegmentType) {
+        val detail = mutable.value.detail ?: return
+        val remaining = skipStore.segments(detail.title, mutable.value.episode).filterNot { it.type == type }
+        skipStore.setSegments(detail.title, mutable.value.episode, remaining)
+        update { it.copy(segments = effectiveSegments()) }
+    }
+
+    fun markedSegments(): List<SkipSegment> {
+        val detail = mutable.value.detail ?: return emptyList()
+        return skipStore.segments(detail.title, mutable.value.episode)
+    }
+
+    /** Contributing is available only when the build supplied an IntroDB key. */
+    val canSubmit get() = introDbConfigured
+
+    /** Contributes viewer-marked segments. Returns false when a key or IMDb id is missing. */
+    fun submitSegments(): Boolean {
+        val detail = mutable.value.detail ?: return false
+        val title = detail.title
+        val episode = mutable.value.episode
+        val key = introDbKey().takeIf { it.isNotEmpty() } ?: return false
+        val imdbId = imdbId() ?: return false
+        if (title.isSeries && episode == null) return false
+        val marked = skipStore.segments(title, episode)
+        if (marked.isEmpty()) return false
+        viewModelScope.launch {
+            marked.forEach { segment ->
+                val body = if (title.isSeries)
+                    IntroDbClient.submitBody(segment, imdbId, episode!!.season, episode.number)
+                    else IntroDbClient.submitBody(segment, imdbId)
+                runCatching { introDb.submit(body, key) }
+            }
+            // Re-read so the result reflects the service, not just what was marked.
+            loadSegments()
+        }
+        return true
     }
     fun deleteProfile(id: String) {
         val list = profiles.delete(id)
@@ -114,7 +228,8 @@ class TvViewModel @JvmOverloads constructor(app: Application,
         if (screen != Screen.ACCOUNT) pendingPlayback = null
         work?.cancel(); catalogJob?.cancel(); stopPairing()
         update { it.copy(screen = screen, failure = null, titles = emptyList(), page = 1, hasMore = true,
-            detail = null, stream = null, loading = false, appending = false, appendFailure = null, focusedKey = null) }
+            detail = null, stream = null, loading = false, appending = false, appendFailure = null, focusedKey = null,
+            segments = null, segmentsLoading = false) }
         refresh()
     }
     fun refresh() {
@@ -211,8 +326,9 @@ class TvViewModel @JvmOverloads constructor(app: Application,
     fun back(): Boolean {
         return when (mutable.value.screen) {
             Screen.PLAYER -> {
-                work?.cancel()
-                update { it.copy(screen = Screen.DETAIL, stream = null, failure = null, loading = false, viewing = library.viewing()) }; true
+                work?.cancel(); segmentsJob?.cancel()
+                update { it.copy(screen = Screen.DETAIL, stream = null, failure = null, loading = false,
+                    viewing = library.viewing(), segmentsLoading = false) }; true
             }
             Screen.DETAIL -> {
                 work?.cancel()
@@ -238,7 +354,32 @@ class TvViewModel @JvmOverloads constructor(app: Application,
         val position = if (resume && previous != null && (previous.duration <= 0 || previous.position < previous.duration - 30000)) previous.position else 0
         update { it.copy(screen = Screen.PLAYER, episode = episode, stream = null, resumePosition = position,
             playbackIdentity = it.profile?.let { profile -> PlaybackIdentity(profile.id, title, episode) }) }
+        loadSegments()
         load { val stream = client.playback(title, episode); ensureActive(); update { it.copy(stream = stream) } }
+    }
+    fun playTitle(title: Title) {
+        pendingPlayback = null
+        val previous = mutable.value
+        if (previous.screen != Screen.DETAIL) origin = previous.screen
+        catalogJob?.cancel(); stopPairing()
+        update { it.copy(screen = Screen.DETAIL, detail = Detail(title, emptyList()), focusedKey = title.key,
+            stream = null, episode = null, resumePosition = 0, failure = null) }
+        load {
+            val detail = client.detail(title)
+            ensureActive()
+            val history = library.viewing()
+            val episode = if (title.isSeries) detail.ordered.firstOrNull { candidate ->
+                history.firstOrNull { it.title.key == title.key && it.episode?.key == candidate.key }?.finished != true
+            } ?: detail.ordered.firstOrNull() else null
+            val viewing = history.firstOrNull { it.title.key == title.key && it.episode?.key == episode?.key }
+            val position = if (viewing != null && (viewing.duration <= 0 || viewing.position < viewing.duration - 30_000)) viewing.position else 0
+            update { it.copy(screen = Screen.PLAYER, detail = detail, episode = episode, stream = null, resumePosition = position,
+                playbackIdentity = it.profile?.let { profile -> PlaybackIdentity(profile.id, title, episode) }) }
+            loadSegments()
+            val stream = client.playback(title, episode)
+            ensureActive()
+            update { it.copy(stream = stream) }
+        }
     }
     fun toggle(title: Title) { update { it.copy(favorites = library.toggle(title)) } }
     fun saveProgress(identity: PlaybackIdentity, position: Long, duration: Long) {

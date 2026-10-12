@@ -94,7 +94,17 @@ object SiteParser {
             Episode(season, number, row.selectFirst(".epTitle")?.text().orEmpty())
         }.distinctBy { it.key }
         return Detail(original.copy(poster = poster.ifBlank { original.poster },
-            synopsis = description, backdrop = backdrop), episodes)
+            synopsis = description, backdrop = backdrop, imdb = imdb(html).ifBlank { original.imdb }), episodes)
+    }
+    // Skip-segment providers are keyed by IMDb id. The watch page links it when it knows
+    // one; absence is normal, so a blank result simply disables community skips.
+    private val imdbId = Regex("tt\\d{7,8}")
+    fun imdb(html: String): String {
+        val doc = Jsoup.parse(html, BASE)
+        val candidates = doc.select("a[href*='imdb.com'], [data-imdb], [data-imdb-id], meta[content*='imdb.com']")
+            .map { element -> listOf(element.attr("abs:href"), element.attr("href"), element.attr("data-imdb"),
+                element.attr("data-imdb-id"), element.attr("content")).joinToString(" ") }
+        return candidates.firstNotNullOfOrNull { text -> imdbId.find(text)?.value }.orEmpty()
     }
     fun account(html: String): Account {
         val doc = Jsoup.parse(html)
