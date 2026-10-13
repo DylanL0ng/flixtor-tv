@@ -1,5 +1,6 @@
 package dev.personal.flixtortv
 
+import android.view.KeyEvent
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -21,6 +22,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
@@ -111,10 +113,24 @@ private fun SettingsAction(
     }
 }
 
-/**
- * Remote keypad for four digit profile PINs. `confirm` receives the entered digits and
- * returns whether the profile may open; a wrong PIN clears the entry and explains itself.
- */
+/** Remote digits and Delete work regardless of which keypad action has focus. */
+private fun Modifier.pinKeys(digit: (Int) -> Unit, delete: () -> Unit): Modifier = onPreviewKeyEvent { event ->
+    val key = event.nativeKeyEvent
+    val value = when (key.keyCode) {
+        in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9 -> key.keyCode - KeyEvent.KEYCODE_0
+        in KeyEvent.KEYCODE_NUMPAD_0..KeyEvent.KEYCODE_NUMPAD_9 -> key.keyCode - KeyEvent.KEYCODE_NUMPAD_0
+        else -> null
+    }
+    val deleting = key.keyCode == KeyEvent.KEYCODE_DEL || key.keyCode == KeyEvent.KEYCODE_FORWARD_DEL
+    if (value == null && !deleting) false else {
+        if (key.action == KeyEvent.ACTION_DOWN && key.repeatCount == 0) {
+            if (value != null) digit(value) else delete()
+        }
+        true
+    }
+}
+
+/** A wrong PIN clears the entry; a complete PIN submits automatically. */
 @Composable internal fun PinEntry(profile: Profile, confirm: (String) -> Boolean, dismiss: () -> Unit) {
     var entry by remember(profile.id) { mutableStateOf("") }
     var wrong by remember(profile.id) { mutableStateOf(false) }
@@ -129,7 +145,9 @@ private fun SettingsAction(
         if (entry.length == ProfilePin.LENGTH) submit()
     }
     BackHandler { dismiss() }
-    SettingsDialog(dismiss, Modifier.widthIn(max = 380.dp), initialFocus = first) {
+    SettingsDialog(dismiss, Modifier.widthIn(max = 380.dp).pinKeys(::digit) {
+        wrong = false; entry = entry.dropLast(1)
+    }, initialFocus = first) {
         // Avatar + name header
         Column(
             Modifier.fillMaxWidth(),
@@ -222,6 +240,7 @@ private fun SettingsAction(
                 GlassButton(
                     "⌫",
                     modifier = Modifier.weight(1f),
+                    contentDescription = stringResource(R.string.pin_delete_digit),
                 ) { wrong = false; entry = entry.dropLast(1) }
             }
             // Cancel
@@ -235,11 +254,13 @@ private fun SettingsAction(
 }
 
 /** Sets, changes or removes the four digit PIN while managing a profile. */
-@Composable private fun PinEditor(profile: Profile, save: (String?) -> Unit) {
+@Composable internal fun PinEditor(profile: Profile, save: (String?) -> Unit) {
     var entry by remember(profile.id) { mutableStateOf("") }
     var open by remember(profile.id) { mutableStateOf(false) }
     val first = remember { FocusRequester() }
-    if (open) SettingsDialog({ open = false }, Modifier.widthIn(max = 460.dp), initialFocus = first) {
+    fun digit(value: Int) { if (entry.length < ProfilePin.LENGTH) entry += value.toString() }
+    if (open) SettingsDialog({ entry = ""; open = false }, Modifier.widthIn(max = 460.dp)
+        .pinKeys(::digit) { entry = entry.dropLast(1) }, initialFocus = first) {
         Text(stringResource(R.string.pin), color = TextPrimary, fontSize = 24.sp, fontWeight = FontWeight.Bold)
         Text(stringResource(R.string.pin_help), color = TextSecondary, fontSize = 16.sp)
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -254,14 +275,14 @@ private fun SettingsAction(
                 row.forEach { value ->
                     SettingsAction(stringResource(R.string.pin_digit, value),
                         if (value == 1) Modifier.focusRequester(first) else Modifier) {
-                        if (entry.length < ProfilePin.LENGTH) entry += value.toString()
+                        digit(value)
                     }
                 }
             }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             SettingsAction(stringResource(R.string.pin_clear)) { entry = "" }
-            SettingsAction(stringResource(R.string.pin_digit, 0)) { if (entry.length < ProfilePin.LENGTH) entry += "0" }
+            SettingsAction(stringResource(R.string.pin_digit, 0)) { digit(0) }
             SettingsAction(stringResource(R.string.pin_delete_digit)) { entry = entry.dropLast(1) }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -276,17 +297,27 @@ private fun SettingsAction(
     if (profile.locked) SettingsAction(stringResource(R.string.pin_remove), variant = GlassButtonVariant.DESTRUCTIVE) { save(null) }
 }
 
-@Composable internal fun ProfilesScreen(s: TvState, vm: TvViewModel) {
+@Composable internal fun ProfilesScreen(
+    s: TvState, vm: TvViewModel, initialManage: Boolean = false,
+    parentBack: (() -> Unit)? = null, entryFocus: FocusRequester? = null,
+) {
     var editing by remember { mutableStateOf(false) }
     var editId by remember { mutableStateOf<String?>(null) }
     var name by remember { mutableStateOf("") }
     var avatar by remember { mutableIntStateOf(0) }
-    var manage by remember { mutableStateOf(false) }
+    var manage by remember { mutableStateOf(initialManage) }
     var deleting by remember { mutableStateOf<Profile?>(null) }
     var unlocking by remember { mutableStateOf<Profile?>(null) }
-    val first = remember { FocusRequester() }
-    LaunchedEffect(editing, manage, s.profiles.size) { if (!editing) first.requestFocus() }
-    BackHandler(editing || manage || unlocking != null) { editing = false; manage = false; unlocking = null }
+    val first = entryFocus ?: remember { FocusRequester() }
+    LaunchedEffect(editing, manage, s.profiles.size) { withFrameNanos { }; first.requestFocus() }
+    BackHandler(editing || manage || unlocking != null || parentBack != null) {
+        when {
+            unlocking != null -> unlocking = null
+            editing -> editing = false
+            parentBack != null -> parentBack()
+            else -> manage = false
+        }
+    }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 36.dp, vertical = 28.dp), verticalArrangement = Arrangement.spacedBy(28.dp)) {
         item {
             Text(stringResource(if (editing && editId == null) R.string.add_profile else if (editing) R.string.edit_profile else if (manage) R.string.manage_profiles else R.string.who_watching),
@@ -324,26 +355,17 @@ private fun SettingsAction(
             item { Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 if (s.profiles.size < 7) SettingsAction(stringResource(R.string.add_profile), variant = GlassButtonVariant.PRIMARY) { editing = true; editId = null; name = ""; avatar = 0 }
                 SettingsAction(stringResource(if (manage) R.string.done else R.string.manage_profiles)) { manage = !manage }
-                if (s.profile != null) SettingsAction(stringResource(R.string.back)) { vm.navigate(Screen.HOME) }
+                if (s.profile != null) SettingsAction(stringResource(R.string.back)) { if (parentBack != null) parentBack() else vm.navigate(Screen.HOME) }
             } }
         } else {
             item { Column(Modifier.widthIn(max = 600.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
                 ProfileAvatar(avatar)
                 Field(stringResource(R.string.profile_name), name, { name = it.take(30) })
                 if (name.trim().isEmpty()) Text(stringResource(R.string.profile_name_required), color = TextSecondary)
-                Text(stringResource(R.string.choose_avatar), color = TextSecondary, fontSize = 17.sp)
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items((0..6).toList(), key = { it }) { value ->
-                        FocusFrame(
-                            modifier = Modifier.size(72.dp), radius = RadiusMedium.dp,
-                            selected = avatar == value,
-                            contentDescription = stringResource(R.string.avatar_number, value + 1),
-                            onClick = { avatar = value },
-                        ) {
-                            ProfileAvatar(value, Modifier.size(48.dp).align(Alignment.Center))
-                        }
-                    }
-                }
+                OptionPicker(stringResource(R.string.avatar_settings),
+                    (0..6).map { MenuChoice(it, stringResource(R.string.avatar_number, it + 1)) }, avatar,
+                    modifier = Modifier.focusRequester(first),
+                    leading = { ProfileAvatar(avatar, Modifier.size(36.dp)) }) { avatar = it }
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     SettingsAction(stringResource(R.string.save), enabled = name.trim().isNotEmpty(), variant = GlassButtonVariant.PRIMARY) {
                         vm.saveProfile(editId, name, avatar); editing = false
@@ -375,44 +397,10 @@ private fun SettingsAction(
     }
 }
 
-@Composable internal fun QualityOptions(quality: Int, select: (Int) -> Unit, vertical: Boolean = false) {
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        if (!vertical) Text(stringResource(R.string.quality_help), color = TextSecondary, fontSize = 16.sp)
-        if (vertical) {
-            listOf(0, 720, 1080, 2160).forEach { height ->
-                val label = if (height == 0) stringResource(R.string.auto_quality) else stringResource(R.string.up_to_resolution, height)
-                FocusFrame(
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
-                    selected = quality == height,
-                    contentDescription = if (quality == height) stringResource(R.string.selected_option, label) else label,
-                    onClick = { select(height) },
-                ) {
-                    Text(label, color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Medium,
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp))
-                }
-            }
-        } else LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(vertical = 6.dp)) {
-            items(listOf(0, 720, 1080, 2160), key = { it }) { height ->
-                val label = if (height == 0) stringResource(R.string.auto_quality) else stringResource(R.string.up_to_resolution, height)
-                FocusFrame(
-                    modifier = Modifier.heightIn(min = 56.dp),
-                    selected = quality == height,
-                    contentDescription = if (quality == height) stringResource(R.string.selected_option, label) else label,
-                    onClick = { select(height) },
-                ) {
-                    Text(label, color = TextPrimary, fontSize = 17.sp, fontWeight = FontWeight.Medium,
-                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp))
-                }
-            }
-        }
-    }
-}
-
 @Composable internal fun UpdateSettings(vm: TvViewModel) {
     val state by vm.updates.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text(stringResource(R.string.updates), color = TextPrimary, fontSize = 24.sp, fontWeight = FontWeight.SemiBold)
         val message = when (state.phase) {
             UpdatePhase.IDLE -> R.string.update_not_checked
             UpdatePhase.CHECKING -> R.string.update_checking

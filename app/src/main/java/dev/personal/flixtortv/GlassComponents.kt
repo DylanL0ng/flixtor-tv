@@ -4,10 +4,13 @@ import android.os.Build
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -42,6 +45,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
@@ -55,6 +63,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -65,6 +74,55 @@ import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.delay
 
 internal enum class GlassButtonVariant { PRIMARY, SECONDARY, ICON, DESTRUCTIVE }
+
+/** Quiet at rest, with independent focus and radio-selection cues. */
+@Composable
+internal fun MenuRow(
+    label: String,
+    modifier: Modifier = Modifier,
+    value: String? = null,
+    enabled: Boolean = true,
+    selected: Boolean? = null,
+    chevron: Boolean = selected == null,
+    leading: (@Composable () -> Unit)? = null,
+    onClick: () -> Unit,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    val shape = RoundedCornerShape(RadiusSmall.dp)
+    Row(
+        modifier.heightIn(min = 56.dp).fillMaxWidth().clip(shape)
+            .background(if (focused) GlassLight else Color.Transparent)
+            .border(if (focused) 2.dp else 0.dp, if (focused) GlassBorderStrong else Color.Transparent, shape)
+            .clickable(interactionSource = interaction, indication = null, enabled = enabled,
+                role = if (selected == null) Role.Button else Role.RadioButton, onClick = onClick)
+            .semantics(mergeDescendants = true) {
+                contentDescription = if (value.isNullOrBlank()) label else "$label · $value"
+                if (selected != null) this.selected = selected
+            }
+            .graphicsLayer { alpha = if (enabled) 1f else .58f }
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        leading?.invoke()
+        Text(label, color = TextPrimary, fontSize = 17.sp, modifier = Modifier.weight(1f),
+            maxLines = 2, overflow = TextOverflow.Ellipsis)
+        if (!value.isNullOrBlank()) Text(value, color = TextSecondary, fontSize = 15.sp,
+            modifier = Modifier.widthIn(max = 180.dp), maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Canvas(Modifier.size(20.dp)) {
+            val color = if (selected == true) Accent else TextSecondary
+            val stroke = 2.dp.toPx()
+            if (selected == true) {
+                drawLine(color, Offset(size.width * .15f, size.height * .5f), Offset(size.width * .4f, size.height * .75f), stroke)
+                drawLine(color, Offset(size.width * .4f, size.height * .75f), Offset(size.width * .85f, size.height * .25f), stroke)
+            } else if (chevron) {
+                drawLine(color, Offset(size.width * .35f, size.height * .2f), Offset(size.width * .65f, size.height * .5f), stroke)
+                drawLine(color, Offset(size.width * .65f, size.height * .5f), Offset(size.width * .35f, size.height * .8f), stroke)
+            }
+        }
+    }
+}
 
 /** Tinted glass over optional artwork. Compose blur blurs the artwork layer (not arbitrary siblings). */
 @Composable
@@ -384,14 +442,20 @@ internal fun MetadataRow(modifier: Modifier = Modifier, items: List<String>, age
     }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 internal fun GlassDrawer(
     onDismiss: () -> Unit,
+    width: Dp,
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .48f)).clickable(onClick = onDismiss)) {
-        GlassSurface(modifier = modifier.align(Alignment.CenterEnd).fillMaxHeight().widthIn(min = 320.dp, max = 620.dp).fillMaxWidth(.34f),
+    Box(Modifier.fillMaxSize()) {
+        Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = .48f))
+            .focusProperties { canFocus = false }.clickable(onClick = onDismiss))
+        GlassSurface(modifier = modifier.align(Alignment.CenterEnd).fillMaxHeight().width(width)
+            .focusProperties { exit = { FocusRequester.Cancel } }.focusGroup()
+            .pointerInput(Unit) { detectTapGestures(onTap = {}) },
             fillHeight = true, contentPadding = 16.dp) {
             content()
         }

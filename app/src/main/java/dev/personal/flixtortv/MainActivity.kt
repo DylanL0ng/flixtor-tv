@@ -138,7 +138,7 @@ class MainActivity : ComponentActivity() {
     var accountContentFocused by remember { mutableStateOf(false) }
     LaunchedEffect(fitting) {
         if (!fitting && returnFromFit && state.screen == Screen.ACCOUNT) {
-            fitFocus.requestFocus(); returnFromFit = false
+            withFrameNanos { }; fitFocus.requestFocus(); returnFromFit = false
         }
     }
     BoxWithConstraints(Modifier.fillMaxSize().background(Midnight)) {
@@ -162,7 +162,7 @@ class MainActivity : ComponentActivity() {
         if (state.failure == Failure.CHANGED && state.screen != Screen.PLAYER) StructuralRecovery(vm)
         if (state.failure in listOf(Failure.CAPACITY, Failure.VIP, Failure.SIGNED_OUT, Failure.EXPIRED) &&
             state.screen !in listOf(Screen.PLAYER, Screen.ACCOUNT)) {
-            Action(stringResource(if (state.account.signedIn) R.string.check_account else R.string.sign_in)) { vm.navigate(Screen.ACCOUNT) }
+            Action(stringResource(if (state.account.signedIn) R.string.check_account else R.string.sign_in)) { vm.openAccountSettings() }
         }
         Box(Modifier.weight(1f).fillMaxWidth()) { saveable.SaveableStateProvider(state.screen.name) {
             when (state.screen) {
@@ -185,7 +185,7 @@ class MainActivity : ComponentActivity() {
                 Screen.SEARCH -> Search(state, images, vm)
                 Screen.LIST -> Library(state, images, vm)
                 Screen.ACCOUNT -> AccountScreen(state, vm, fitFocus, accountContentFocus,
-                    onContentFocusChanged = { accountContentFocused = it }) { fitting = true }
+                    onContentFocusChanged = { accountContentFocused = it }, restoringFromFit = returnFromFit) { fitting = true }
                 Screen.DETAIL -> DetailScreen(state, images, vm)
             }
         } }
@@ -211,7 +211,7 @@ class MainActivity : ComponentActivity() {
     accountContentFocus: FocusRequester) {
     val active = if (state.screen == Screen.DETAIL) Screen.HOME else state.screen
     val focus = remember { FocusRequester() }
-    LaunchedEffect(state.screen, restore) { if (restore && state.screen != Screen.DETAIL) focus.requestFocus() }
+    LaunchedEffect(state.screen) { if (restore && state.screen != Screen.DETAIL) focus.requestFocus() }
     // Sidebar: narrow glass column matching the reference's deep navy-purple rail
     Box(
         Modifier
@@ -488,8 +488,9 @@ class MainActivity : ComponentActivity() {
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(stringResource(if (s.screen == Screen.SHOWS) R.string.shows else R.string.movies), fontSize = 32.sp,
                 fontWeight = FontWeight.Bold, color = TextPrimary, modifier = Modifier.weight(1f))
-            GlassButton(stringResource(R.string.latest), variant = GlassButtonVariant.SECONDARY) { vm.sort("latest") }
-            GlassButton(stringResource(R.string.top_rated), variant = GlassButtonVariant.SECONDARY) { vm.sort("best") }
+            OptionPicker(stringResource(R.string.sort_options),
+                listOf(MenuChoice("latest", stringResource(R.string.latest)), MenuChoice("best", stringResource(R.string.top_rated))),
+                s.sort, Modifier.width(280.dp)) { if (it != s.sort) vm.sort(it) }
         }
         Results(s, images, vm, Modifier.weight(1f)) { vm.browse(true) }
     }
@@ -548,7 +549,7 @@ class MainActivity : ComponentActivity() {
         if (s.appendFailure != null) {
             if (s.appendFailure in listOf(Failure.CAPACITY, Failure.VIP, Failure.SIGNED_OUT, Failure.EXPIRED, Failure.ACCESS)) {
                 FailureMessage(s.appendFailure, more)
-                if (s.appendFailure != Failure.ACCESS) Action(stringResource(R.string.sign_in)) { vm.navigate(Screen.ACCOUNT) }
+                if (s.appendFailure != Failure.ACCESS) Action(stringResource(R.string.sign_in)) { vm.openAccountSettings() }
             } else Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(stringResource(R.string.pagination_failed), color = Muted, modifier = Modifier.weight(1f))
                 Action(stringResource(R.string.retry), click = more)
@@ -704,135 +705,10 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@Composable private fun AccountScreen(s: TvState, vm: TvViewModel, fitFocus: FocusRequester,
-    contentFocus: FocusRequester, onContentFocusChanged: (Boolean) -> Unit, fit: () -> Unit) {
-    var email by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    var passwordLogin by remember { mutableStateOf(false) }
-    var confirmClear by remember { mutableStateOf(false) }
-    LaunchedEffect(s.account.signedIn) { if (s.account.signedIn) { email = ""; password = ""; passwordLogin = false } }
-    LazyColumn(Modifier.fillMaxSize().onFocusChanged { onContentFocusChanged(it.hasFocus) }
-        .padding(horizontal = 24.dp, vertical = 16.dp), contentPadding = PaddingValues(bottom = 32.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp)) {
-        item {
-            GlassSurface(Modifier.fillMaxWidth(0.82f)) {
-                Text(stringResource(R.string.settings), fontSize = 30.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
-                Text(s.profile?.name.orEmpty(), color = TextSecondary, modifier = Modifier.padding(top = 6.dp))
-                GlassButton(stringResource(R.string.manage_profiles), modifier = Modifier.padding(top = 14.dp)
-                    .focusRequester(contentFocus)) { vm.navigate(Screen.PROFILES) }
-            }
-        }
-        item {
-            GlassSurface(Modifier.fillMaxWidth(0.82f)) {
-                Text(stringResource(R.string.vip_title), fontSize = 26.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
-                Text(stringResource(R.string.vip_help), color = TextSecondary, modifier = Modifier.padding(top = 8.dp))
-            }
-        }
-        item {
-            GlassSurface(Modifier.fillMaxWidth(0.82f)) {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                if (s.loading) Loading()
-                s.failure?.let { FailureMessage(it, if (s.failure == Failure.EXPIRED) vm::startPairing else vm::refresh) }
-                Text(accountLabel(s.account), color = Accent)
-                if (s.account.status == AccountStatus.SIGNED_IN) Text(stringResource(R.string.account_entitlement_unknown), color = Muted)
-                Action(stringResource(R.string.refresh_account), enabled = !s.loading && !s.pairing) { vm.refresh() }
-                if (s.account.signedIn) Action(stringResource(R.string.clear_session), enabled = !s.loading) { vm.clearSession() }
-                else {
-                    if (s.pairing) Action(stringResource(R.string.cancel_pair)) { vm.stopPairing() }
-                    else Action(stringResource(R.string.pair_phone), enabled = !s.loading) { vm.startPairing() }
-                    if (!s.pairing && !passwordLogin) Action(stringResource(R.string.sign_in_password), enabled = !s.loading) { passwordLogin = true }
-                    val pair = s.pair
-                    if (pair != null) PairingView(pair)
-                    else if (s.pairing) Loading()
-                }
-            }
-            }
-        }
-        if (!s.account.signedIn && !s.pairing && passwordLogin) item {
-            GlassSurface(Modifier.widthIn(max = 560.dp).fillMaxWidth()) {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Field(stringResource(R.string.email), email, { email = it.take(254) }, keyboard = KeyboardType.Email)
-                    Field(stringResource(R.string.password), password, { password = it.take(64) }, password = true)
-                    Action(stringResource(R.string.sign_in), enabled = !s.loading && android.util.Patterns.EMAIL_ADDRESS.matcher(email.trim()).matches() && password.length in 8..64) {
-                        vm.login(email, password); password = ""
-                    }
-                    Action(stringResource(R.string.cancel)) { passwordLogin = false; password = "" }
-                }
-            }
-        }
-        item {
-            GlassSurface(Modifier.fillMaxWidth(0.82f)) {
-                Text(stringResource(R.string.playback_settings), fontSize = 24.sp, color = TextPrimary)
-                QualityOptions(s.profile?.quality ?: 0, vm::setQuality)
-                val autoplay = s.profile?.autoplay != false
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Action(if (autoplay) stringResource(R.string.selected_option, stringResource(R.string.autoplay_next))
-                        else stringResource(R.string.autoplay_next)) { vm.setAutoplay(!autoplay) }
-                    Text(stringResource(R.string.autoplay_help), color = TextSecondary)
-                }
-            }
-        }
-        item {
-            GlassSurface(Modifier.fillMaxWidth(0.82f)) {
-                Text(stringResource(R.string.skip_segments), fontSize = 24.sp, color = TextPrimary)
-                Text(stringResource(R.string.introdb_key_help), color = TextSecondary, modifier = Modifier.padding(top = 8.dp))
-                Text(stringResource(if (introDbConfigured) R.string.introdb_key_stored else R.string.introdb_key_unavailable),
-                    color = if (introDbConfigured) Accent else Muted, modifier = Modifier.padding(top = 8.dp))
-            }
-        }
-        item { UpdateSettings(vm) }
-        item {
-            GlassSurface(Modifier.fillMaxWidth(0.82f)) {
-                Text(stringResource(R.string.display), fontSize = 24.sp, color = TextPrimary)
-                GlassButton(stringResource(R.string.screen_fit), Modifier.focusRequester(fitFocus), onClick = fit)
-            }
-        }
-        item {
-            GlassSurface(Modifier.fillMaxWidth(0.82f)) {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(stringResource(R.string.local_library), color = Muted)
-                Action(stringResource(R.string.clear_history)) { confirmClear = true }
-                Text(stringResource(R.string.personal_client), color = Muted, fontSize = 12.sp)
-            }
-            }
-        }
-        if (confirmClear) item {
-            GlassSurface(Modifier.fillMaxWidth(0.82f)) {
-            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                Text(stringResource(R.string.clear_history_title), fontSize = 20.sp)
-                Text(stringResource(R.string.clear_history_help), color = Muted)
-                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    Action(stringResource(R.string.cancel)) { confirmClear = false }
-                    Action(stringResource(R.string.clear)) { vm.clearLibrary(); confirmClear = false }
-                }
-            }
-            }
-        }
-    }
-}
-
-@Composable private fun PairingView(pair: PairCode) {
-    val bitmap = remember(pair.url) {
-        val matrix = MultiFormatWriter().encode(pair.url, BarcodeFormat.QR_CODE, 300, 300)
-        Bitmap.createBitmap(300, 300, Bitmap.Config.ARGB_8888).apply {
-            val pixels = IntArray(90000) { i -> if (matrix[i % 300, i / 300]) android.graphics.Color.BLACK else android.graphics.Color.WHITE }
-            setPixels(pixels, 0, 300, 0, 0, 300, 300)
-        }
-    }
-    Row(horizontalArrangement = Arrangement.spacedBy(28.dp), verticalAlignment = Alignment.CenterVertically) {
-        androidx.compose.foundation.Image(bitmap.asImageBitmap(), stringResource(R.string.qr_description), Modifier.size(190.dp))
-        Column(Modifier.widthIn(max = 420.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(stringResource(R.string.pair_help), fontSize = 18.sp)
-            Text(pair.code, fontSize = 30.sp, fontWeight = FontWeight.Bold)
-            Text(pair.url, color = Accent, fontSize = 14.sp)
-            Text(stringResource(R.string.pair_expiry), color = Muted)
-        }
-    }
-}
-
 @Composable internal fun Field(label: String, value: String, onChange: (String) -> Unit, modifier: Modifier = Modifier,
     password: Boolean = false, keyboard: KeyboardType = KeyboardType.Text) {
     var focused by remember { mutableStateOf(false) }
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
     Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(label, fontSize = 14.sp, color = Muted)
         BasicTextField(value, onChange, singleLine = true, textStyle = TextStyle(color = Color.White, fontSize = 18.sp),
@@ -840,6 +716,14 @@ class MainActivity : ComponentActivity() {
             visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
             cursorBrush = Brush.verticalGradient(listOf(Accent, Accent)),
             modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).onFocusChanged { focused = it.isFocused }
+                .onPreviewKeyEvent { event ->
+                    val key = event.nativeKeyEvent
+                    if (key.action != android.view.KeyEvent.ACTION_DOWN) false else when (key.keyCode) {
+                        android.view.KeyEvent.KEYCODE_DPAD_UP -> focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Up)
+                        android.view.KeyEvent.KEYCODE_DPAD_DOWN -> focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Down)
+                        else -> false
+                    }
+                }
                 .background(GlassMedium, RoundedCornerShape(RadiusSmall.dp)).border(if (focused) 2.dp else 1.dp,
                     if (focused) GlassBorderStrong else GlassBorder, RoundedCornerShape(RadiusSmall.dp))
                 .padding(14.dp).semantics { contentDescription = label })

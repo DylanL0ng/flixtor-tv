@@ -26,6 +26,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -56,6 +57,9 @@ import androidx.media3.common.text.CueGroup
 import androidx.tv.material3.Text
 import kotlinx.coroutines.delay
 
+private enum class PlayerDrawer { SETTINGS, EPISODES }
+private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLAY, SKIP }
+
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable internal fun PlaybackScreen(stream: Stream, state: TvState, vm: TvViewModel) {
     val context = LocalContext.current
@@ -64,8 +68,13 @@ import kotlinx.coroutines.delay
     var failure by remember(stream) { mutableStateOf<Failure?>(null) }
     var buffering by remember(stream) { mutableStateOf(true) }
     var controls by remember(stream) { mutableStateOf(true) }
-    var settings by remember(stream) { mutableStateOf(false) }
-    var episodesOpen by remember(stream) { mutableStateOf(false) }
+    var drawer by remember(stream) { mutableStateOf<PlayerDrawer?>(null) }
+    var settingsPage by remember(stream) { mutableStateOf(PlayerSettingsPage.ROOT) }
+    var settingsOrigin by remember(stream) { mutableStateOf(PlayerSettingsPage.QUALITY) }
+    val settingsRows = remember(stream) { PlayerSettingsPage.entries.associateWith { FocusRequester() } }
+    val settingsList = androidx.compose.foundation.lazy.rememberLazyListState()
+    val settings = drawer == PlayerDrawer.SETTINGS
+    val episodesOpen = drawer == PlayerDrawer.EPISODES
     var ended by remember(stream) { mutableStateOf(false) }
     var countdown by remember(stream) { mutableIntStateOf(0) }
     var marking by remember(stream) { mutableStateOf<SegmentType?>(null) }
@@ -82,7 +91,6 @@ import kotlinx.coroutines.delay
     val rootFocus = remember(stream) { FocusRequester() }
     val playFocus = remember(stream) { FocusRequester() }
     val settingsFocus = remember(stream) { FocusRequester() }
-    val drawerFocus = remember(stream) { FocusRequester() }
     val episodesFocus = remember(stream) { FocusRequester() }
     val episodesButtonFocus = remember(stream) { FocusRequester() }
     val nextFocus = remember(stream) { FocusRequester() }
@@ -97,9 +105,10 @@ import kotlinx.coroutines.delay
     var preview by remember(stream) { mutableStateOf<Long?>(null) }
     var timelineFocused by remember(stream) { mutableStateOf(false) }
     val safe = LocalSafePadding.current
+    val layoutDirection = LocalLayoutDirection.current
     val density = LocalDensity.current
     var bottomAreaHeight by remember(stream) { mutableStateOf(0.dp) }
-    val showTransport = controls && !settings && !ended
+    val showTransport = controls && !ended
     val showSkip = skippable != null && failure == null && !settings && !episodesOpen && !ended
     val skipVisible by rememberUpdatedState(showSkip)
     val player = remember(stream) {
@@ -142,7 +151,7 @@ import kotlinx.coroutines.delay
                 buffering = value == Player.STATE_BUFFERING
                 if (value == Player.STATE_ENDED) {
                     identity?.let { vm.saveProgress(it, player.duration.coerceAtLeast(0), player.duration.coerceAtLeast(0)) }
-                    settings = false; episodesOpen = false; controls = true; ended = true
+                    drawer = null; controls = true; ended = true
                 }
             }
             override fun onIsPlayingChanged(value: Boolean) { playing = value }
@@ -192,22 +201,21 @@ import kotlinx.coroutines.delay
         while (countdown > 0) { delay(1000); countdown-- }
         vm.play(next)
     }
-    var returnToSettings by remember { mutableStateOf(false) }
-    var returnToEpisodes by remember { mutableStateOf(false) }
+    var returnToDrawer by remember(stream) { mutableStateOf<PlayerDrawer?>(null) }
+    fun openDrawer(value: PlayerDrawer) { preview = null; controls = true; settingsPage = PlayerSettingsPage.ROOT; settingsOrigin = PlayerSettingsPage.QUALITY; drawer = value }
+    fun closeDrawer() { returnToDrawer = drawer; drawer = null }
     fun closeOverlay() {
         when {
+            settings && settingsPage != PlayerSettingsPage.ROOT -> settingsPage = PlayerSettingsPage.ROOT
+            drawer != null -> closeDrawer()
             ended -> { ended = false; countdown = 0 }
-            settings -> { settings = false; preview = null; returnToSettings = true }
-            episodesOpen -> { episodesOpen = false; returnToEpisodes = true }
             preview != null -> preview = null
             else -> controls = false
         }
     }
     LaunchedEffect(controls, settings, episodesOpen, ended, failure) {
         when {
-            settings -> drawerFocus.requestFocus()
-            episodesOpen -> episodesFocus.requestFocus()
-            ended && next == null -> rootFocus.requestFocus()
+            ended && next == null && drawer == null -> rootFocus.requestFocus()
             !controls && !ended -> rootFocus.requestFocus()
         }
     }
@@ -228,16 +236,13 @@ import kotlinx.coroutines.delay
         subtitleView?.visibility = android.view.View.GONE
     } }
     DisposableEffect(view) { onDispose { view.player = null } }
-    Box(Modifier.fillMaxSize().background(Color.Black).focusRequester(rootFocus).onPreviewKeyEvent { event ->
+    BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black).focusRequester(rootFocus).onPreviewKeyEvent { event ->
         val key = event.nativeKeyEvent
         if (key.action != KeyEvent.ACTION_DOWN) return@onPreviewKeyEvent false
-        // When settings or episodes drawer is open, trap focus — don't let D-pad control video
-        if (settings || episodesOpen) {
+        // Drawer controls own navigation; the focus group prevents escape to transport.
+        if (drawer != null) {
             when (key.keyCode) {
                 KeyEvent.KEYCODE_BACK -> { closeOverlay(); true }
-                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER,
-                KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN,
-                KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> true // consume but let drawer handle navigation
                 else -> false
             }
         } else {
@@ -266,23 +271,27 @@ import kotlinx.coroutines.delay
             }
         }
     }.focusable()) {
+        val safeWidth = maxWidth - safe.calculateLeftPadding(layoutDirection) - safe.calculateRightPadding(layoutDirection)
+        val drawerWidth = maxOf(320.dp, minOf(620.dp, safeWidth * .36f)).coerceAtMost(safeWidth)
         AndroidView(factory = { view }, modifier = Modifier.fillMaxSize())
         val showNext = ended && next != null && !settings && !episodesOpen
         val showBottomArea = showTransport || showSkip || showNext
         if (showBottomArea) {
-            BoxWithConstraints(Modifier.align(Alignment.BottomEnd).fillMaxWidth().padding(safe)) {
+            BoxWithConstraints(Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(safe)) {
                 // These targets attach during this subcomposition, before its effects run.
-                LaunchedEffect(controls, episodesOpen, ended, failure) {
+                LaunchedEffect(controls, drawer, ended, failure) {
                     when {
                         showNext -> nextFocus.requestFocus()
-                        episodesOpen -> Unit
-                        controls && returnToSettings -> { settingsFocus.requestFocus(); returnToSettings = false }
-                        controls && returnToEpisodes -> { episodesButtonFocus.requestFocus(); returnToEpisodes = false }
+                        drawer != null -> Unit
+                        controls && returnToDrawer != null -> {
+                            if (returnToDrawer == PlayerDrawer.SETTINGS) settingsFocus.requestFocus()
+                            else episodesButtonFocus.requestFocus()
+                            returnToDrawer = null
+                        }
                         showTransport -> playFocus.requestFocus()
                     }
                 }
-                val drawerWidth = maxOf(320.dp, minOf(620.dp, maxWidth * .36f))
-                val controlsWidth = if (episodesOpen) (maxWidth - drawerWidth - 16.dp).coerceAtLeast(0.dp) else maxWidth
+                val controlsWidth = if (drawer != null) (maxWidth - drawerWidth - 16.dp).coerceAtLeast(0.dp) else maxWidth
                 // One measured stack keeps actions, transport and captions clear of each other.
                 Column(Modifier.width(controlsWidth)
                     .onSizeChanged { bottomAreaHeight = with(density) { it.height.toDp() } }
@@ -370,10 +379,10 @@ import kotlinx.coroutines.delay
                                 PlayerControl(stringResource(R.string.seek_back), TransportIcon.BACKWARD, enabled = player.isCurrentMediaItemSeekable) { player.seekBack() }
                                 PlayerControl(stringResource(R.string.seek_forward), TransportIcon.FORWARD, enabled = player.isCurrentMediaItemSeekable) { player.seekForward() }
                                 Spacer(Modifier.weight(1f))
-                                if (episodes.isNotEmpty() && !episodesOpen) PlayerControl(stringResource(R.string.episodes), TransportIcon.EPISODES,
-                                    Modifier.focusRequester(episodesButtonFocus)) { controls = true; episodesOpen = true }
-                                if (!episodesOpen) {
-                                    PlayerControl(stringResource(R.string.settings), TransportIcon.SETTINGS, Modifier.focusRequester(settingsFocus)) { settings = true }
+                                if (episodes.isNotEmpty() && drawer == null) PlayerControl(stringResource(R.string.episodes), TransportIcon.EPISODES,
+                                    Modifier.focusRequester(episodesButtonFocus)) { openDrawer(PlayerDrawer.EPISODES) }
+                                if (drawer == null) {
+                                    PlayerControl(stringResource(R.string.settings), TransportIcon.SETTINGS, Modifier.focusRequester(settingsFocus)) { openDrawer(PlayerDrawer.SETTINGS) }
                                     PlayerControl(stringResource(R.string.back), TransportIcon.EXIT) { vm.back() }
                                 }
                             }
@@ -387,32 +396,94 @@ import kotlinx.coroutines.delay
             }
         }
         if (settings) {
+            val audioChoices = trackChoices(tracks, C.TRACK_TYPE_AUDIO)
+            val subtitleChoices = listOf(MenuChoice<TrackChoice?>(null, stringResource(R.string.subtitles_off), "off")) +
+                trackChoices(tracks, C.TRACK_TYPE_TEXT)
+            val audioSelected = audioChoices.firstOrNull { it.value?.isSelected == true }?.value
+            val subtitleSelected = subtitleChoices.firstOrNull { it.value?.isSelected == true }?.value
+            val quality = state.profile?.quality ?: 0
+            val qualities = qualityChoices()
+            val autoplayOptions = autoplayChoices()
+            val titles = mapOf(
+                PlayerSettingsPage.ROOT to stringResource(R.string.settings),
+                PlayerSettingsPage.QUALITY to stringResource(R.string.quality),
+                PlayerSettingsPage.AUDIO to stringResource(R.string.audio),
+                PlayerSettingsPage.SUBTITLES to stringResource(R.string.subtitles),
+                PlayerSettingsPage.AUTOPLAY to stringResource(R.string.autoplay_next),
+                PlayerSettingsPage.SKIP to stringResource(R.string.skip_segments),
+            )
+            fun openPage(page: PlayerSettingsPage) { settingsOrigin = page; settingsPage = page }
             GlassDrawer(
-                onDismiss = { settings = false; returnToSettings = true },
+                onDismiss = ::closeDrawer,
+                width = drawerWidth,
                 modifier = Modifier.padding(safe).padding(vertical = 14.dp),
             ) {
-                GlassButton(stringResource(R.string.back), Modifier.focusRequester(drawerFocus).widthIn(min = 82.dp),
-                    variant = GlassButtonVariant.SECONDARY, compact = true) { settings = false; returnToSettings = true }
-                LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(top = 18.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                item { Text(stringResource(R.string.quality), fontSize = 16.sp); QualityOptions(state.profile?.quality ?: 0, vm::setQuality, vertical = true) }
-                item { Text(stringResource(R.string.audio), fontSize = 16.sp) }
-                item { TrackOptions(player, tracks, C.TRACK_TYPE_AUDIO) }
-                item { Text(stringResource(R.string.subtitles), fontSize = 16.sp) }
-                item {
-                    val off = !tracks.groups.any { it.type == C.TRACK_TYPE_TEXT && it.isSelected }
-                    Action(if (off) stringResource(R.string.selected_option, stringResource(R.string.subtitles_off)) else stringResource(R.string.subtitles_off)) {
-                        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon().setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).build()
+                val headerBack = remember { FocusRequester() }
+                Text(titles.getValue(settingsPage), color = TextPrimary, fontSize = 24.sp)
+                MenuRow(stringResource(R.string.back), modifier = Modifier.focusRequester(headerBack), chevron = false, onClick = ::closeOverlay)
+                when (settingsPage) {
+                    PlayerSettingsPage.ROOT -> {
+                        LaunchedEffect(settingsPage) {
+                            val origin = if (settingsOrigin == PlayerSettingsPage.AUDIO && audioChoices.isEmpty())
+                                PlayerSettingsPage.QUALITY else settingsOrigin
+                            settingsList.scrollToItem(origin.ordinal - 1)
+                            withFrameNanos { }
+                            settingsRows.getValue(origin).requestFocus()
+                        }
+                        LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = settingsList,
+                            contentPadding = PaddingValues(vertical = 4.dp)) {
+                            item(key = "quality") {
+                                MenuRow(titles.getValue(PlayerSettingsPage.QUALITY),
+                                    value = qualities.firstOrNull { it.value == quality }?.label,
+                                    modifier = Modifier.focusRequester(settingsRows.getValue(PlayerSettingsPage.QUALITY))) { openPage(PlayerSettingsPage.QUALITY) }
+                            }
+                            item(key = "audio") {
+                                MenuRow(titles.getValue(PlayerSettingsPage.AUDIO),
+                                    value = audioChoices.firstOrNull { it.value == audioSelected }?.label ?: stringResource(R.string.no_tracks),
+                                    modifier = Modifier.focusRequester(settingsRows.getValue(PlayerSettingsPage.AUDIO)),
+                                    enabled = audioChoices.isNotEmpty()) { openPage(PlayerSettingsPage.AUDIO) }
+                            }
+                            item(key = "subtitles") {
+                                MenuRow(titles.getValue(PlayerSettingsPage.SUBTITLES),
+                                    value = subtitleChoices.first { it.value == subtitleSelected }.label,
+                                    modifier = Modifier.focusRequester(settingsRows.getValue(PlayerSettingsPage.SUBTITLES))) { openPage(PlayerSettingsPage.SUBTITLES) }
+                            }
+                            item(key = "autoplay") {
+                                MenuRow(titles.getValue(PlayerSettingsPage.AUTOPLAY),
+                                    value = autoplayOptions.first { it.value == autoplay }.label,
+                                    modifier = Modifier.focusRequester(settingsRows.getValue(PlayerSettingsPage.AUTOPLAY))) { openPage(PlayerSettingsPage.AUTOPLAY) }
+                            }
+                            item(key = "skip") {
+                                MenuRow(titles.getValue(PlayerSettingsPage.SKIP),
+                                    modifier = Modifier.focusRequester(settingsRows.getValue(PlayerSettingsPage.SKIP))) { openPage(PlayerSettingsPage.SKIP) }
+                            }
+                        }
                     }
-                    TrackOptions(player, tracks, C.TRACK_TYPE_TEXT)
-                }
-                item {
-                    val label = stringResource(R.string.autoplay_next)
-                    Action(if (autoplay) stringResource(R.string.selected_option, label) else label) { vm.setAutoplay(!autoplay) }
-                    Text(stringResource(R.string.autoplay_help), color = Muted, fontSize = 13.sp)
-                }
-                item {
-                    Text(stringResource(R.string.skip_segments), fontSize = 16.sp)
+                    PlayerSettingsPage.QUALITY -> {
+                        Text(stringResource(R.string.quality_help), color = TextSecondary, fontSize = 13.sp)
+                        ChoiceList(qualities, quality, Modifier.weight(1f)) { vm.setQuality(it); settingsPage = PlayerSettingsPage.ROOT }
+                    }
+                    PlayerSettingsPage.AUDIO -> {
+                        // Tracks can disappear while this page is open. Back remains reachable.
+                        if (audioChoices.isEmpty()) {
+                            Text(stringResource(R.string.no_tracks), color = TextSecondary)
+                            LaunchedEffect(Unit) { withFrameNanos { }; headerBack.requestFocus() }
+                        } else ChoiceList(audioChoices, audioSelected, Modifier.weight(1f)) {
+                            selectTrack(player, C.TRACK_TYPE_AUDIO, it); settingsPage = PlayerSettingsPage.ROOT
+                        }
+                    }
+                    PlayerSettingsPage.SUBTITLES -> ChoiceList(subtitleChoices, subtitleSelected, Modifier.weight(1f)) {
+                        selectTrack(player, C.TRACK_TYPE_TEXT, it); settingsPage = PlayerSettingsPage.ROOT
+                    }
+                    PlayerSettingsPage.AUTOPLAY -> {
+                        Text(stringResource(R.string.autoplay_help), color = TextSecondary, fontSize = 13.sp)
+                        ChoiceList(autoplayOptions, autoplay, Modifier.weight(1f)) { vm.setAutoplay(it); settingsPage = PlayerSettingsPage.ROOT }
+                    }
+                    PlayerSettingsPage.SKIP -> {
+                        LaunchedEffect(Unit) { withFrameNanos { }; headerBack.requestFocus() }
+                        LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(vertical = 4.dp)) {
+                            item {
+                                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(stringResource(R.string.skip_segments_help), color = Muted, fontSize = 13.sp)
                     val imdbId = vm.imdbId()
                     Field(stringResource(R.string.imdb_id), imdbId.orEmpty(), { vm.setImdbId(it.take(12)) })
@@ -423,6 +494,7 @@ import kotlinx.coroutines.delay
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         SegmentType.entries.forEach { type ->
                             val existing = segments.firstOrNull { it.type == type }
+                            Text(segmentLabel(type), color = TextPrimary, fontSize = 16.sp)
                             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Text(if (existing != null) "${clock(existing.startMs)} – ${clock(existing.endMs)}"
                                     else stringResource(R.string.segment_unmarked), color = Muted, fontSize = 13.sp,
@@ -444,8 +516,11 @@ import kotlinx.coroutines.delay
                         SegmentType.entries.forEach(vm::clearMarked)
                     }
                     Action(stringResource(R.string.segment_submit), enabled = vm.markedSegments().isNotEmpty() && vm.canSubmit) { vm.submitSegments() }
+                                }
+                            }
+                        }
+                    }
                 }
-            }
             }
         }
         if (episodesOpen) {
@@ -454,40 +529,38 @@ import kotlinx.coroutines.delay
             var picked by remember(stream) { mutableIntStateOf(0) }
             val activeSeason = if (seasons.contains(picked)) picked else seasons.firstOrNull() ?: 0
             GlassDrawer(
-                onDismiss = { episodesOpen = false; returnToEpisodes = true },
+                onDismiss = ::closeDrawer,
+                width = drawerWidth,
                 modifier = Modifier.padding(safe).padding(vertical = 14.dp),
             ) {
+                LaunchedEffect(Unit) { withFrameNanos { }; episodesFocus.requestFocus() }
                 GlassButton(stringResource(R.string.back), Modifier.focusRequester(episodesFocus).widthIn(min = 82.dp),
-                    variant = GlassButtonVariant.SECONDARY, compact = true) { episodesOpen = false; returnToEpisodes = true }
+                    variant = GlassButtonVariant.SECONDARY, compact = true, onClick = ::closeDrawer)
                 SeasonPicker(seasons, activeSeason, modifier = Modifier.padding(top = 14.dp)) { picked = it }
                 LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(episodes.filter { it.season == activeSeason }.sortedBy { it.number }, key = Episode::key) { episode ->
                         val viewing = state.viewing.firstOrNull { it.title.key == title?.key && it.episode?.key == episode.key }
                         EpisodeRow(episode, viewing, state.episode?.key == episode.key) {
-                            episodesOpen = false
+                            drawer = null
                             vm.play(episode)
                         }
                     }
                 }
                 Row(Modifier.fillMaxWidth().padding(top = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    GlassButton(stringResource(R.string.settings), Modifier.weight(1f).focusRequester(settingsFocus),
+                    GlassButton(stringResource(R.string.settings), Modifier.weight(1f),
                         variant = GlassButtonVariant.ICON) {
-                        episodesOpen = false
-                        settings = true
+                        openDrawer(PlayerDrawer.SETTINGS)
                     }
                     GlassButton(stringResource(R.string.back), Modifier.weight(1f), variant = GlassButtonVariant.ICON) {
-                        episodesOpen = false
-                        returnToEpisodes = true
-                        vm.back()
+                        closeDrawer()
                     }
                 }
             }
         }
         // A separate viewport also contains explicitly positioned cues above transport.
-        if (failure == null) BoxWithConstraints(Modifier.fillMaxSize().padding(safe)) {
+        if (failure == null) Box(Modifier.fillMaxSize().padding(safe)) {
             AndroidView(factory = { SubtitleView(it).apply { setUserDefaultStyle(); setUserDefaultTextSize(); setBottomPaddingFraction(0.04f) } },
-                modifier = Modifier.fillMaxSize().padding(end = if (settings || episodesOpen)
-                    maxOf(320.dp, minOf(620.dp, maxWidth * .36f)) else 0.dp,
+                modifier = Modifier.fillMaxSize().padding(end = if (drawer != null) drawerWidth + 16.dp else 0.dp,
                 bottom = if (showBottomArea) bottomAreaHeight + 8.dp else 0.dp),
                 update = { subtitles -> subtitles.setCues(cues) })
         }
@@ -495,23 +568,28 @@ import kotlinx.coroutines.delay
     }
 }
 
+private data class TrackChoice(val group: Tracks.Group, val index: Int) {
+    val isSelected get() = group.isTrackSelected(index)
+}
+
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
-@Composable private fun TrackOptions(player: Player, tracks: Tracks, type: Int) {
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        val groups = tracks.groups.filter { it.type == type }
-        var number = 0
-        groups.forEach { group ->
-            (0 until group.length).filter { group.isTrackSupported(it) }.forEach { index ->
-                val format = group.getTrackFormat(index)
-                val label = format.label ?: format.language ?: stringResource(R.string.track_number, ++number)
-                Action(if (group.isTrackSelected(index)) stringResource(R.string.selected_option, label) else label) {
-                    player.trackSelectionParameters = player.trackSelectionParameters.buildUpon().setTrackTypeDisabled(type, false)
-                        .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, index)).build()
-                }
-            }
+@Composable private fun trackChoices(tracks: Tracks, type: Int): List<MenuChoice<TrackChoice?>> {
+    var number = 0
+    return tracks.groups.filter { it.type == type }.flatMap { group ->
+        (0 until group.length).filter { group.isTrackSupported(it) }.map { index ->
+            val format = group.getTrackFormat(index)
+            val label = format.label ?: format.language ?: stringResource(R.string.track_number, ++number)
+            MenuChoice<TrackChoice?>(TrackChoice(group, index), label, "${group.mediaTrackGroup.id}:$index")
         }
-        if (groups.isEmpty()) Text(stringResource(R.string.no_tracks), color = Muted)
     }
+}
+
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+private fun selectTrack(player: Player, type: Int, choice: TrackChoice?) {
+    val parameters = player.trackSelectionParameters.buildUpon().setTrackTypeDisabled(type, choice == null)
+        .clearOverridesOfType(type)
+    if (choice != null) parameters.setOverrideForType(TrackSelectionOverride(choice.group.mediaTrackGroup, choice.index))
+    player.trackSelectionParameters = parameters.build()
 }
 
 internal fun clock(milliseconds: Long): String {

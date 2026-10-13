@@ -129,31 +129,11 @@ internal data class EpisodeProgress(val fraction: Float, val finished: Boolean, 
     }
 }
 
-/** Season switcher — horizontal chip strip with Accent highlight on active season. */
+/** A single season row keeps long-running shows compact. */
 @Composable internal fun SeasonPicker(seasons: List<Int>, selected: Int, modifier: Modifier = Modifier, select: (Int) -> Unit) {
     if (seasons.size < 2) return
-    LazyRow(modifier, horizontalArrangement = Arrangement.spacedBy(8.dp),
-        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp)) {
-        items(seasons, key = { it }) { season ->
-            val isSelected = season == selected
-            val label = stringResource(R.string.season, season)
-            FocusFrame(
-                modifier = Modifier.heightIn(min = 44.dp),
-                selected = isSelected,
-                restingFill = if (isSelected) Accent.copy(alpha = .18f) else GlassDark,
-                contentDescription = if (isSelected) stringResource(R.string.selected_option, label) else label,
-                onClick = { select(season) },
-            ) {
-                Text(
-                    label,
-                    color = if (isSelected) Accent else TextSecondary,
-                    fontSize = 15.sp,
-                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
-                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
-                )
-            }
-        }
-    }
+    OptionPicker(stringResource(R.string.season_options),
+        seasons.map { MenuChoice(it, stringResource(R.string.season, it)) }, selected, modifier, select = select)
 }
 
 /** The season holding the first unfinished episode, so the list opens where viewing stopped. */

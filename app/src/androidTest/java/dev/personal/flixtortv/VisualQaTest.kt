@@ -321,6 +321,10 @@ class VisualQaTest {
         key(KeyEvent.KEYCODE_DPAD_DOWN, 7)
         key(KeyEvent.KEYCODE_DPAD_RIGHT)
         repeat(16) {
+            if (!labels(focused()).contains(context.getString(R.string.display))) key(KeyEvent.KEYCODE_DPAD_DOWN)
+        }
+        key(KeyEvent.KEYCODE_DPAD_CENTER)
+        repeat(16) {
             if (!fitFocused) {
                 val focus = focused()
                 val label = labels(focus)
@@ -359,7 +363,8 @@ class VisualQaTest {
         key(KeyEvent.KEYCODE_DPAD_DOWN); Thread.sleep(500); capture("player")
         key(KeyEvent.KEYCODE_DPAD_DOWN); key(KeyEvent.KEYCODE_DPAD_LEFT, 4); key(KeyEvent.KEYCODE_DPAD_RIGHT, 3); key(KeyEvent.KEYCODE_DPAD_CENTER)
         assertTrue("Settings drawer must open", visible(context.getString(R.string.quality))); capture("player-settings")
-        key(KeyEvent.KEYCODE_DPAD_DOWN, 2); key(KeyEvent.KEYCODE_DPAD_CENTER)
+        key(KeyEvent.KEYCODE_DPAD_CENTER) // Quality submenu, initially Auto.
+        key(KeyEvent.KEYCODE_DPAD_DOWN); key(KeyEvent.KEYCODE_DPAD_CENTER)
         assertEquals(720, vm.state.value.profile?.quality)
         assertEquals(720, ProfileStore(context).all().first { it.id == profile.id }.quality)
         key(KeyEvent.KEYCODE_BACK)
@@ -367,6 +372,15 @@ class VisualQaTest {
         awaitCondition("Settings focus must restore: ${focusedLabel()}") { focusedLabel().contains(context.getString(R.string.settings)) }
         key(KeyEvent.KEYCODE_DPAD_CENTER)
         awaitCondition("Drawer must reopen") { visible(context.getString(R.string.quality)) }
+        var subtitlesFocused = false
+        repeat(12) {
+            if (!subtitlesFocused) {
+                subtitlesFocused = labels(focused()).contains(context.getString(R.string.subtitles))
+                if (!subtitlesFocused) key(KeyEvent.KEYCODE_DPAD_DOWN)
+            }
+        }
+        assertTrue("Subtitles category must be reachable", subtitlesFocused)
+        key(KeyEvent.KEYCODE_DPAD_CENTER)
         var englishFocused = false
         repeat(12) {
             if (!englishFocused) {

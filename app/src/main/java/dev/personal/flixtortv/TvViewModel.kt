@@ -15,7 +15,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 enum class Screen { PROFILES, HOME, MOVIES, SHOWS, SEARCH, LIST, ACCOUNT, DETAIL, PLAYER }
+enum class SettingsEntry { ROOT, ACCOUNT }
+
 data class TvState(
+    val settingsEntry: SettingsEntry = SettingsEntry.ROOT,
+    val settingsNavigationId: Int = 0,
     val screen: Screen = Screen.PROFILES, val shelves: List<Shelf> = emptyList(),
     val titles: List<Title> = emptyList(), val detail: Detail? = null,
     val loading: Boolean = false, val failure: Failure? = null,
@@ -216,7 +220,7 @@ class TvViewModel @JvmOverloads constructor(app: Application,
     }
     fun signInForPlayback() {
         mutable.value.detail?.let { pendingPlayback = it to mutable.value.episode }
-        navigate(Screen.ACCOUNT)
+        openAccountSettings()
     }
     private fun resumePendingPlayback() {
         val pending = pendingPlayback ?: return
@@ -224,10 +228,13 @@ class TvViewModel @JvmOverloads constructor(app: Application,
         update { it.copy(detail = pending.first) }
         play(pending.second)
     }
-    fun navigate(screen: Screen) {
+    fun openAccountSettings() { navigateTo(Screen.ACCOUNT, SettingsEntry.ACCOUNT) }
+    fun navigate(screen: Screen) { navigateTo(screen, SettingsEntry.ROOT) }
+    private fun navigateTo(screen: Screen, settingsEntry: SettingsEntry) {
         if (screen != Screen.ACCOUNT) pendingPlayback = null
         work?.cancel(); catalogJob?.cancel(); stopPairing()
-        update { it.copy(screen = screen, failure = null, titles = emptyList(), page = 1, hasMore = true,
+        update { it.copy(screen = screen, settingsEntry = settingsEntry, failure = null, titles = emptyList(), page = 1, hasMore = true,
+            settingsNavigationId = it.settingsNavigationId + if (screen == Screen.ACCOUNT) 1 else 0,
             detail = null, stream = null, loading = false, appending = false, appendFailure = null, focusedKey = null,
             segments = null, segmentsLoading = false) }
         refresh()
