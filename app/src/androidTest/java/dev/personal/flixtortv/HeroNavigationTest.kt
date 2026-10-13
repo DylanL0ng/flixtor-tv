@@ -6,6 +6,7 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.content.SharedPreferences
 import android.graphics.Bitmap
+import android.graphics.Color
 import android.graphics.Rect
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -37,6 +38,13 @@ class HeroNavigationTest {
         val target = instrument.targetContext
         val prefix = "navigation_test_${UUID.randomUUID()}_"
         val folder = File(target.cacheDir, prefix).apply { mkdirs() }
+        val artworkFile = File(folder, "fixture-art.png")
+        Bitmap.createBitmap(320, 180, Bitmap.Config.ARGB_8888).let { bitmap ->
+            bitmap.eraseColor(Color.rgb(30, 80, 120))
+            artworkFile.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            bitmap.recycle()
+        }
+        val artwork = artworkFile.toURI().toString()
         val app = object : Application() {
             init { attachBaseContext(object : ContextWrapper(target) {
                 override fun getSharedPreferences(name: String, mode: Int): SharedPreferences =
@@ -228,6 +236,16 @@ class HeroNavigationTest {
             assertEquals(1, mediaCalls.get())
             delayed = null
 
+            // A nonblank artwork model exercises the exact renderer that crashed on the TV.
+            for (title in listOf(show, movie)) {
+                render(base.copy(screen = Screen.HOME))
+                instrument.runOnMainSync { vm.openFrom(title.copy(poster = artwork), "hero") }
+                await("Artwork detail loads without crashing") { vm.state.value.screen == Screen.DETAIL && !vm.state.value.loading }
+                await("Artwork detail Back target") { focusedLabel().contains(target.getString(R.string.back)) }
+                capture("detail-artwork-${title.key.replace(':', '-')}")
+                key(KeyEvent.KEYCODE_BACK)
+            }
+
             LibraryStore(app, profile.id).save(Viewing(movie, null, 15000, 90000))
             instrument.runOnMainSync { vm.playTitle(movie) }
             await("Movie Play requests media immediately") { mediaCalls.get() == 2 && !vm.state.value.loading }
@@ -236,8 +254,11 @@ class HeroNavigationTest {
             assertEquals(15000L, vm.state.value.resumePosition)
             assertEquals("hero", vm.state.value.focusedKey)
 
+            val artBase = base.copy(shelves = base.shelves.map { shelf ->
+                shelf.copy(titles = shelf.titles.map { it.copy(poster = artwork, backdrop = artwork) })
+            })
             for (fit in listOf(ScreenFit(), ScreenFit(10, 10))) {
-                render(base.copy(screen = Screen.HOME, focusedKey = "hero", screenFit = fit))
+                render(artBase.copy(screen = Screen.HOME, focusedKey = "hero", screenFit = fit))
                 await("Full hero on entry") { wholeHero() }
                 key(KeyEvent.KEYCODE_DPAD_DOWN); key(KeyEvent.KEYCODE_DPAD_DOWN)
                 key(KeyEvent.KEYCODE_DPAD_UP); key(KeyEvent.KEYCODE_DPAD_UP)

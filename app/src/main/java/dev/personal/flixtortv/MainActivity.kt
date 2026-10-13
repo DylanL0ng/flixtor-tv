@@ -10,6 +10,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -66,7 +67,6 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.*
 import coil.ImageLoader
-import coil.compose.AsyncImage
 import coil.compose.rememberAsyncImagePainter
 import coil.disk.DiskCache
 import coil.memory.MemoryCache
@@ -597,7 +597,7 @@ class MainActivity : ComponentActivity() {
             Box(Modifier.fillMaxWidth().then(if (imageUrl.isNotBlank()) Modifier.aspectRatio(16f / 9f)
                 else Modifier.heightIn(min = 200.dp))) {
                 if (imageUrl.isNotBlank()) {
-                    AsyncImage(painter, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                    Image(painter, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
                     // Right-edge fade
                     Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(
                         listOf(Color.Transparent, AppBackground.copy(alpha = .08f), AppBackground.copy(alpha = .72f), AppBackground),
