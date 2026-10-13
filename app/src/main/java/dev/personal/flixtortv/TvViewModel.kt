@@ -358,19 +358,21 @@ class TvViewModel @JvmOverloads constructor(app: Application,
         load { val stream = client.playback(title, episode); ensureActive(); update { it.copy(stream = stream) } }
     }
     fun playTitle(title: Title) {
+        if (title.isSeries) {
+            openFrom(title, "hero")
+            return
+        }
         pendingPlayback = null
         val previous = mutable.value
         if (previous.screen != Screen.DETAIL) origin = previous.screen
         catalogJob?.cancel(); stopPairing()
-        update { it.copy(screen = Screen.DETAIL, detail = Detail(title, emptyList()), focusedKey = title.key,
+        update { it.copy(screen = Screen.DETAIL, detail = Detail(title, emptyList()), focusedKey = "hero",
             stream = null, episode = null, resumePosition = 0, failure = null) }
         load {
             val detail = client.detail(title)
             ensureActive()
             val history = library.viewing()
-            val episode = if (title.isSeries) detail.ordered.firstOrNull { candidate ->
-                history.firstOrNull { it.title.key == title.key && it.episode?.key == candidate.key }?.finished != true
-            } ?: detail.ordered.firstOrNull() else null
+            val episode: Episode? = null
             val viewing = history.firstOrNull { it.title.key == title.key && it.episode?.key == episode?.key }
             val position = if (viewing != null && (viewing.duration <= 0 || viewing.position < viewing.duration - 30_000)) viewing.position else 0
             update { it.copy(screen = Screen.PLAYER, detail = detail, episode = episode, stream = null, resumePosition = position,

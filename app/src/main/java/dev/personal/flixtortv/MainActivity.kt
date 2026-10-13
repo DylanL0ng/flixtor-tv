@@ -10,11 +10,15 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -40,11 +44,13 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -95,7 +101,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@Composable private fun TvApp(vm: TvViewModel) {
+@Composable internal fun TvApp(vm: TvViewModel) {
     val state by vm.state.collectAsStateWithLifecycle()
     val owner = LocalLifecycleOwner.current
     DisposableEffect(owner) {
@@ -316,6 +322,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable private fun Home(s: TvState, images: ImageLoader, vm: TvViewModel) {
     if (s.shelves.isEmpty()) {
         GlassSurface(Modifier.fillMaxWidth().padding(24.dp)) {
@@ -324,15 +331,25 @@ class MainActivity : ComponentActivity() {
         }
         return
     }
+    val listState = rememberLazyListState()
+    var heroReady by remember { mutableStateOf(false) }
+    LaunchedEffect(s.focusedKey) {
+        heroReady = false
+        if (s.focusedKey == "hero") {
+            listState.scrollToItem(0)
+            heroReady = true
+        }
+    }
     BoxWithConstraints(Modifier.fillMaxSize()) {
     val compact = maxHeight < 420.dp
     // Hero fills ~62% of screen height — dominant, like the reference
     val heroHeight = if (compact) maxHeight * .52f else maxHeight * .62f
-    LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(if (compact) 12.dp else 20.dp),
+    LazyColumn(Modifier.fillMaxSize().testTag("home_viewport").semantics { testTagsAsResourceId = true },
+        state = listState, verticalArrangement = Arrangement.spacedBy(if (compact) 12.dp else 20.dp),
         contentPadding = PaddingValues(bottom = 28.dp)) {
         item(key = "hero") {
             Box {
-                Hero(s.shelves.first().titles.first(), images = images, restore = s.focusedKey == "hero",
+                Hero(s.shelves.first().titles.first(), images = images, restore = s.focusedKey == "hero" && heroReady,
                     heroHeight = heroHeight, play = vm::playTitle) { vm.openFrom(it, "hero") }
                 // Pagination dots — bottom-right of hero
                 if (!compact) {
@@ -376,11 +393,20 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable private fun Hero(title: Title, images: ImageLoader, showAction: Boolean = true,
     showSynopsis: Boolean = true, restore: Boolean = false, heroHeight: Dp? = null,
     play: ((Title) -> Unit)? = null, open: (Title) -> Unit) {
     val focus = remember { FocusRequester() }
     LaunchedEffect(restore) { if (restore && showAction) focus.requestFocus() }
+    val bringIntoView = remember { BringIntoViewRequester() }
+    var hasFocus by remember { mutableStateOf(false) }
+    LaunchedEffect(hasFocus) {
+        if (hasFocus) {
+            withFrameNanos { }
+            bringIntoView.bringIntoView()
+        }
+    }
     val metadata = listOf(title.year, title.genres)
     // Use backdrop if available (detail page), fall back to poster for shelf items
     val imageUrl = title.backdrop.ifBlank { title.poster }
@@ -390,7 +416,9 @@ class MainActivity : ComponentActivity() {
         background = if (imageUrl.isNotBlank()) painter else null,
         metadata,
         if (showSynopsis) title.synopsis else "",
-        Modifier.fillMaxWidth().height(heroHeight ?: if (showAction) 300.dp else 240.dp),
+        Modifier.fillMaxWidth().height(heroHeight ?: if (showAction) 300.dp else 240.dp)
+            .testTag("home_hero")
+            .bringIntoViewRequester(bringIntoView).onFocusChanged { hasFocus = it.hasFocus }.focusGroup(),
         contentOffsetY = if (showAction) 24.dp else 0.dp,
         isNew = showAction,
         ageRating = if (title.rating.isNotBlank()) title.rating else "",
@@ -546,8 +574,8 @@ class MainActivity : ComponentActivity() {
     val detail = s.detail ?: return
     val title = detail.title
     val focus = remember(title.key) { FocusRequester() }
+    var initiallyFocused by remember(title.key) { mutableStateOf(false) }
     val focusBack = s.loading || s.failure != null || (title.isSeries && detail.episodes.isEmpty())
-    LaunchedEffect(title.key, s.loading, s.failure) { focus.requestFocus() }
     val seasons = remember(detail.episodes) { detail.episodes.map { it.season }.distinct().sorted() }
     var picked by remember(title.key) { mutableIntStateOf(0) }
     val season = if (seasons.contains(picked)) picked else startSeason(s.viewing, title) ?: seasons.firstOrNull() ?: 1
@@ -566,8 +594,9 @@ class MainActivity : ComponentActivity() {
     ) {
         // Hero image — full-width, fixed aspect, scrolls with content
         item(key = "hero") {
-            if (imageUrl.isNotBlank()) {
-                Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f)) {
+            Box(Modifier.fillMaxWidth().then(if (imageUrl.isNotBlank()) Modifier.aspectRatio(16f / 9f)
+                else Modifier.heightIn(min = 200.dp))) {
+                if (imageUrl.isNotBlank()) {
                     AsyncImage(painter, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
                     // Right-edge fade
                     Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(
@@ -578,36 +607,43 @@ class MainActivity : ComponentActivity() {
                     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(
                         listOf(Color.Transparent, Color.Transparent, AppBackground.copy(alpha = .60f), AppBackground),
                     )))
-                    // Back button anchored top-left
-                    Box(Modifier.align(Alignment.TopStart).padding(start = 16.dp, top = 16.dp)) {
-                        Action(stringResource(R.string.back), modifier = Modifier.focusRequester(focus)) { vm.back() }
+                }
+                // Back button anchored top-left
+                Box(Modifier.align(Alignment.TopStart).padding(start = 16.dp, top = 16.dp)) {
+                    Action(stringResource(R.string.back), modifier = Modifier.focusRequester(focus)) { vm.back() }
+                }
+                // Title + metadata at bottom-left of image
+                Column(
+                    Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(start = 20.dp, bottom = 20.dp, end = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    if (title.rating.isNotBlank()) {
+                        Box(
+                            Modifier
+                                .border(1.dp, TextMuted.copy(alpha = .5f), RoundedCornerShape(4.dp))
+                                .padding(horizontal = 8.dp, vertical = 2.dp)
+                        ) { Text(title.rating, color = TextMuted, fontSize = 12.sp, fontWeight = FontWeight.Medium) }
                     }
-                    // Title + metadata at bottom-left of image
-                    Column(
-                        Modifier
-                            .align(Alignment.BottomStart)
-                            .padding(start = 20.dp, bottom = 20.dp, end = 12.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        if (title.rating.isNotBlank()) {
-                            Box(
-                                Modifier
-                                    .border(1.dp, TextMuted.copy(alpha = .5f), RoundedCornerShape(4.dp))
-                                    .padding(horizontal = 8.dp, vertical = 2.dp)
-                            ) { Text(title.rating, color = TextMuted, fontSize = 12.sp, fontWeight = FontWeight.Medium) }
-                        }
-                        Text(title.name, color = TextPrimary, fontSize = 28.sp, fontWeight = FontWeight.Bold,
-                            lineHeight = 32.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                        if (title.year.isNotBlank() || title.genres.isNotBlank()) {
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                if (title.year.isNotBlank()) Text(title.year, color = TextSecondary, fontSize = 14.sp)
-                                if (title.year.isNotBlank() && title.genres.isNotBlank())
-                                    Box(Modifier.size(3.dp).background(TextMuted, RoundedCornerShape(2.dp)))
-                                if (title.genres.isNotBlank()) Text(title.genres, color = TextSecondary, fontSize = 14.sp,
-                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            }
+                    Text(title.name, color = TextPrimary, fontSize = 28.sp, fontWeight = FontWeight.Bold,
+                        lineHeight = 32.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                    if (title.year.isNotBlank() || title.genres.isNotBlank()) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            if (title.year.isNotBlank()) Text(title.year, color = TextSecondary, fontSize = 14.sp)
+                            if (title.year.isNotBlank() && title.genres.isNotBlank())
+                                Box(Modifier.size(3.dp).background(TextMuted, RoundedCornerShape(2.dp)))
+                            if (title.genres.isNotBlank()) Text(title.genres, color = TextSecondary, fontSize = 14.sp,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
+                }
+            }
+            LaunchedEffect(title.key) {
+                if (!initiallyFocused) {
+                    withFrameNanos { }
+                    focus.requestFocus()
+                    initiallyFocused = true
                 }
             }
         }
