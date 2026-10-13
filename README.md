@@ -24,6 +24,14 @@ set -a; . ./.env; set +a
 
 Blank entries are treated as unset, so an incomplete `.env` builds normally. Every variable has a working default: `TV_VERSION_NAME` and `TV_VERSION_CODE` fall back to the values in `app/build.gradle.kts`, a missing `TV_KEYSTORE` leaves the release build unsigned, and an empty `TV_REPORT_URL` or `TV_INTRODB_API_KEY` simply disables that feature.
 
+## Anime
+
+Open **Anime** in the navigation rail to browse popular titles or search HiAnime. Details, My List and Continue Watching use the existing profile library. Every manual start/resume asks for **English dub** or **Japanese with subtitles**, including episode selection inside the player. Unavailable versions are disabled. Autoplay and the still-watching confirmation retain the selected version; an unavailable next episode stops at the chooser rather than changing audio silently. Back cancels the chooser and restores the initiating screen or episode drawer.
+
+The built-in native adapter resolves streams afresh and uses source-specific media/caption headers. It has no backend or extension runtime and never receives the FlixTor cookie jar. Source access, supported embed servers, caption availability and audio versions depend on the provider. V1 supports its ZokoAnime embed. Profile viewing progress and local skip marks are version-specific; verified IntroDB numbering/audio mappings are unavailable for anime, so anime skip marks remain local.
+
+`AnimeTest` covers parsing, specials/order, source identities, storage compatibility, page eviction, missing versions, fresh resolution and cancellation. `AnimeIntegrationTest` is opt-in and restricted to QA emulators. Run its isolated offline UI/playback scenario with `-e animeQA true`; add `-e liveAnime true` for the separate live native Media3 probe. It captures Anime browse, detail, chooser and playback screenshots at the actual device resolution. Fixtures and brief live playback do not establish sustained ONN/Chromecast hardware acceptance.
+
 ## Install and update
 
 Download the signed APK from [GitHub Releases](https://github.com/DylanL0ng/flixtor-tv/releases). Existing installations need one manual signed upgrade to introduce the updater. Subsequent stable releases are checked on launch, every six hours while the app runs, manually from Settings, and after structural failures. Downloads verify checksum, package ID, increasing version code, compatible Android version, and the installed signing certificate. Updates install in place after leaving playback; Android may require allowing this app to install packages and confirming installation. Cancellation keeps the current app and data.

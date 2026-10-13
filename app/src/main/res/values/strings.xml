@@ -1,4 +1,16 @@
 <resources>
+    <string name="anime">Anime</string>
+    <string name="anime_search_hint">Search anime</string>
+    <string name="anime_popular">Popular anime</string>
+    <string name="anime_choose_version">Choose anime version</string>
+    <string name="anime_dub">English dub</string>
+    <string name="anime_sub">Japanese with subtitles</string>
+    <string name="anime_episode">Episode %1$s · %2$s</string>
+    <string name="anime_version_unavailable">%1$s · unavailable</string>
+    <string name="anime_version_missing">%1$s is unavailable for this episode. Choose another version or go back.</string>
+    <string name="anime_source_failure">Anime source unavailable. Retry or go back.</string>
+    <string name="anime_change_version">Choose Dub/Sub</string>
+    <string name="anime_skip_help">Mark anime skips locally. Dub and Sub keep separate marks.</string>
     <string name="still_watching_title">Are you still watching?</string>
     <string name="still_watching_help">Continue watching to start the next episode.</string>
     <string name="stop_watching">Stop watching</string>

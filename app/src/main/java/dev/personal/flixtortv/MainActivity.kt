@@ -117,9 +117,9 @@ class MainActivity : ComponentActivity() {
     val lifecycleState by owner.lifecycle.currentStateFlow.collectAsState()
     var attemptedVersion by remember { mutableStateOf("") }
     var showUpdatePrompt by remember { mutableStateOf(false) }
-    LaunchedEffect(updateState.phase, state.screen, lifecycleState, confirmingExit, fitting) {
+    LaunchedEffect(updateState.phase, state.screen, lifecycleState, confirmingExit, fitting, state.animeChoice) {
         if (updateState.phase == UpdatePhase.READY && state.screen != Screen.PLAYER &&
-            !confirmingExit && !fitting && lifecycleState == Lifecycle.State.RESUMED && attemptedVersion != updateState.version) {
+            !confirmingExit && !fitting && state.animeChoice == null && lifecycleState == Lifecycle.State.RESUMED && attemptedVersion != updateState.version) {
             attemptedVersion = updateState.version
             if (context.packageManager.canRequestPackageInstalls()) (context as? MainActivity)?.installUpdate()
             else showUpdatePrompt = true
@@ -161,7 +161,7 @@ class MainActivity : ComponentActivity() {
         Column(Modifier.weight(1f).fillMaxHeight()) {
         if (state.failure == Failure.CHANGED && state.screen != Screen.PLAYER) StructuralRecovery(vm)
         if (state.failure in listOf(Failure.CAPACITY, Failure.VIP, Failure.SIGNED_OUT, Failure.EXPIRED) &&
-            state.screen !in listOf(Screen.PLAYER, Screen.ACCOUNT)) {
+            state.screen !in listOf(Screen.PLAYER, Screen.ACCOUNT) && !vm.isAnime) {
             Action(stringResource(if (state.account.signedIn) R.string.check_account else R.string.sign_in)) { vm.openAccountSettings() }
         }
         Box(Modifier.weight(1f).fillMaxWidth()) { saveable.SaveableStateProvider(state.screen.name) {
@@ -172,16 +172,18 @@ class MainActivity : ComponentActivity() {
                     if (stream != null) PlaybackScreen(stream, state, vm)
                     else Column(Modifier.fillMaxSize().padding(safe).padding(12.dp), verticalArrangement = Arrangement.Center) {
                         if (state.loading) Loading()
-                        state.failure?.let { if (it == Failure.VIP) AccessMessage(state.account) else FailureMessage(it, vm::refresh) }
+                        state.failure?.let { if (it == Failure.VIP && !vm.isAnime) AccessMessage(state.account) else ContentFailure(it, vm) }
+                        if (state.failure != null && vm.isAnime) Action(stringResource(R.string.anime_change_version)) { vm.play(state.episode) }
                         Action(stringResource(R.string.back)) { vm.back() }
                         if (state.failure == Failure.CHANGED) StructuralRecovery(vm)
-                        if (state.failure in listOf(Failure.VIP, Failure.EXPIRED, Failure.SIGNED_OUT, Failure.CAPACITY)) {
+                        if (!vm.isAnime && state.failure in listOf(Failure.VIP, Failure.EXPIRED, Failure.SIGNED_OUT, Failure.CAPACITY)) {
                             Action(stringResource(R.string.sign_in)) { vm.signInForPlayback() }
                         }
                     }
                 }
                 Screen.HOME -> Home(state, images, vm)
                 Screen.MOVIES, Screen.SHOWS -> Browse(state, images, vm)
+                Screen.ANIME -> AnimeBrowse(state, images, vm)
                 Screen.SEARCH -> Search(state, images, vm)
                 Screen.LIST -> Library(state, images, vm)
                 Screen.ACCOUNT -> AccountScreen(state, vm, fitFocus, accountContentFocus,
@@ -192,7 +194,8 @@ class MainActivity : ComponentActivity() {
         }
         }
         }
-        if (showUpdatePrompt && !confirmingExit && !fitting && updateState.phase == UpdatePhase.READY && state.screen != Screen.PLAYER) {
+        state.animeChoice?.let { AnimeVersionDialog(it, vm) }
+        if (showUpdatePrompt && !confirmingExit && !fitting && state.animeChoice == null && updateState.phase == UpdatePhase.READY && state.screen != Screen.PLAYER) {
             CompositionLocalProvider(LocalSafePadding provides safe) {
             UpdateReadyDialog(updateState.version, { showUpdatePrompt = false }) {
                 showUpdatePrompt = false
@@ -244,6 +247,7 @@ class MainActivity : ComponentActivity() {
                     Triple(Screen.SEARCH, R.string.search, 1),
                     Triple(Screen.MOVIES, R.string.movies, 2),
                     Triple(Screen.SHOWS, R.string.shows, 3),
+                    Triple(Screen.ANIME, R.string.anime, 7),
                     Triple(Screen.LIST, R.string.my_list, 4),
                     Triple(Screen.PROFILES, R.string.profiles, 5),
                 )
@@ -317,6 +321,12 @@ class MainActivity : ComponentActivity() {
             3 -> { drawRoundRect(ink, Offset(x * .1f, y * .25f), androidx.compose.ui.geometry.Size(x * .8f, y * .56f), androidx.compose.ui.geometry.CornerRadius(stroke * 2), style = androidx.compose.ui.graphics.drawscope.Stroke(stroke)); drawLine(ink, Offset(x * .35f, y * .13f), Offset(x * .5f, y * .25f), stroke); drawLine(ink, Offset(x * .65f, y * .13f), Offset(x * .5f, y * .25f), stroke); drawLine(ink, Offset(x * .35f, y * .83f), Offset(x * .35f, y * .94f), stroke); drawLine(ink, Offset(x * .65f, y * .83f), Offset(x * .65f, y * .94f), stroke) }
             4 -> { drawRect(ink, Offset(x * .15f, y * .14f), androidx.compose.ui.geometry.Size(x * .7f, y * .72f), style = androidx.compose.ui.graphics.drawscope.Stroke(stroke)); drawLine(ink, Offset(x * .15f, y * .38f), Offset(x * .85f, y * .38f), stroke); drawLine(ink, Offset(x * .15f, y * .62f), Offset(x * .85f, y * .62f), stroke) }
             5 -> { drawCircle(ink, x * .18f, Offset(x * .5f, y * .32f), style = androidx.compose.ui.graphics.drawscope.Stroke(stroke)); drawArc(ink, 180f, 180f, false, Offset(x * .12f, y * .46f), androidx.compose.ui.geometry.Size(x * .76f, y * .48f), style = androidx.compose.ui.graphics.drawscope.Stroke(stroke)) }
+            7 -> {
+                drawCircle(ink, x * .4f, Offset(x * .5f, y * .5f), style = androidx.compose.ui.graphics.drawscope.Stroke(stroke))
+                val play = androidx.compose.ui.graphics.Path().apply {
+                    moveTo(x * .4f, y * .3f); lineTo(x * .7f, y * .5f); lineTo(x * .4f, y * .7f); close()
+                }; drawPath(play, ink)
+            }
             else -> { drawCircle(ink, x * .28f, Offset(x * .5f, y * .5f), style = androidx.compose.ui.graphics.drawscope.Stroke(stroke)); drawCircle(ink, stroke, Offset(x * .5f, y * .5f)); for (a in 0..7) { val angle = Math.PI * a / 4; drawLine(ink, Offset(x * (.5f + .31f * kotlin.math.cos(angle).toFloat()), y * (.5f + .31f * kotlin.math.sin(angle).toFloat())), Offset(x * (.5f + .46f * kotlin.math.cos(angle).toFloat()), y * (.5f + .46f * kotlin.math.sin(angle).toFloat())), stroke) } }
         }
     }
@@ -327,7 +337,7 @@ class MainActivity : ComponentActivity() {
     if (s.shelves.isEmpty()) {
         GlassSurface(Modifier.fillMaxWidth().padding(24.dp)) {
             if (s.loading) Loading()
-            s.failure?.let { FailureMessage(it, vm::refresh) }
+            s.failure?.let { ContentFailure(it, vm) }
         }
         return
     }
@@ -370,8 +380,8 @@ class MainActivity : ComponentActivity() {
             }
         }
         if (s.failure != null) item { Box(Modifier.padding(horizontal = 8.dp)) { FailureMessage(s.failure, vm::refresh) } }
-        val continuing = s.viewing.filter { it.position > 1000 && (it.duration <= 0 || it.position < it.duration - 30000) }
-            .distinctBy { it.title.key }
+        val continuing = s.viewing.distinctBy { it.title.key }
+            .filter { it.position > 1000 && !it.finished }
         if (continuing.isNotEmpty()) item(key = "continue") {
             ShelfView(stringResource(R.string.continue_watching), "continue", continuing.map { it.title },
                 images, s.focusedKey, landscape = false,
@@ -511,7 +521,28 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@Composable private fun Results(s: TvState, images: ImageLoader, vm: TvViewModel, modifier: Modifier, more: () -> Unit) {
+@Composable private fun AnimeBrowse(s: TvState, images: ImageLoader, vm: TvViewModel) {
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val compact = maxHeight < 420.dp
+        Column(Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(if (compact) 12.dp else 18.dp)) {
+            if (compact) Row(horizontalArrangement = Arrangement.spacedBy(20.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(stringResource(R.string.anime), fontSize = 32.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                Field(stringResource(R.string.anime_search_hint), s.animeQuery, vm::searchAnime, Modifier.weight(1f))
+            } else {
+                Text(stringResource(R.string.anime), fontSize = 32.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                GlassSurface(Modifier.fillMaxWidth(.76f), radius = RadiusMedium.dp) {
+                    Field(stringResource(R.string.anime_search_hint), s.animeQuery, vm::searchAnime, Modifier.fillMaxWidth())
+                }
+                if (s.animeQuery.isBlank()) Text(stringResource(R.string.anime_popular), color = TextSecondary)
+            }
+            Results(s, images, vm, Modifier.weight(1f), cellWidth = if (compact) 88.dp else 120.dp) { vm.browse(true) }
+        }
+    }
+}
+
+@Composable private fun Results(s: TvState, images: ImageLoader, vm: TvViewModel, modifier: Modifier,
+    cellWidth: Dp = 120.dp, more: () -> Unit) {
     val grid = rememberLazyGridState()
     var gridKey by rememberSaveable { mutableStateOf(s.catalogKey) }
     val requestMore by rememberUpdatedState(more)
@@ -533,11 +564,11 @@ class MainActivity : ComponentActivity() {
     }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (s.loading) Loading()
-        s.failure?.let { FailureMessage(it, vm::refresh) }
+        s.failure?.let { ContentFailure(it, vm) }
         if (!s.loading && s.failure == null && s.titles.isEmpty()) GlassSurface(Modifier.fillMaxWidth(0.8f)) {
             Text(stringResource(R.string.empty_results), color = TextSecondary, fontSize = 20.sp)
         }
-        LazyVerticalGrid(columns = GridCells.Adaptive(120.dp), state = grid, modifier = Modifier.weight(1f),
+        LazyVerticalGrid(columns = GridCells.Adaptive(cellWidth), state = grid, modifier = Modifier.weight(1f),
             horizontalArrangement = Arrangement.spacedBy(20.dp), verticalArrangement = Arrangement.spacedBy(24.dp),
             contentPadding = PaddingValues(horizontal = 4.dp, vertical = 12.dp)) {
             items(s.titles.size, key = { index -> (s.titles as? CatalogPages.Snapshot)?.key(index) ?: s.titles[index].key }) { index ->
@@ -549,7 +580,7 @@ class MainActivity : ComponentActivity() {
         if (s.appendFailure != null) {
             if (s.appendFailure in listOf(Failure.CAPACITY, Failure.VIP, Failure.SIGNED_OUT, Failure.EXPIRED, Failure.ACCESS)) {
                 FailureMessage(s.appendFailure, more)
-                if (s.appendFailure != Failure.ACCESS) Action(stringResource(R.string.sign_in)) { vm.openAccountSettings() }
+                if (s.appendFailure != Failure.ACCESS && !vm.isAnime) Action(stringResource(R.string.sign_in)) { vm.openAccountSettings() }
             } else Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(stringResource(R.string.pagination_failed), color = Muted, modifier = Modifier.weight(1f))
                 Action(stringResource(R.string.retry), click = more)
@@ -580,7 +611,9 @@ class MainActivity : ComponentActivity() {
     val seasons = remember(detail.episodes) { detail.episodes.map { it.season }.distinct().sorted() }
     var picked by remember(title.key) { mutableIntStateOf(0) }
     val season = if (seasons.contains(picked)) picked else startSeason(s.viewing, title) ?: seasons.firstOrNull() ?: 1
-    val episodes = remember(detail.episodes, season) { detail.episodes.filter { it.season == season }.sortedBy { it.number } }
+    val episodes = remember(detail.episodes, season, title.isSeries) {
+        if (title.isSeries) detail.ordered.filter { it.season == season } else emptyList()
+    }
     val resume = s.viewing.firstOrNull { it.title.key == title.key && !it.finished }
     val imageUrl = title.backdrop.ifBlank { title.poster }
     val painter = rememberAsyncImagePainter(imageUrl.takeIf { it.isNotBlank() }, imageLoader = images)
@@ -664,7 +697,7 @@ class MainActivity : ComponentActivity() {
                 // Loading / failure
                 if (s.loading || s.failure != null) {
                     if (s.loading) Loading()
-                    s.failure?.let { FailureMessage(it, vm::refresh) }
+                    s.failure?.let { ContentFailure(it, vm) }
                 }
                 // Action row
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(bottom = 8.dp)) {
@@ -695,12 +728,13 @@ class MainActivity : ComponentActivity() {
                     Text(stringResource(R.string.no_episodes), color = TextSecondary, fontSize = 15.sp,
                         modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp))
                 }
-                // Episode list
-                episodes.forEach { episode ->
-                    val viewing = s.viewing.firstOrNull { it.title.key == title.key && it.episode?.key == episode.key }
-                    EpisodeRow(episode, viewing, s.episode?.key == episode.key, enabled = !s.loading) { vm.play(episode) }
-                }
             }
+        }
+        // Long anime runs must remain lazy instead of composing every episode in one item.
+        items(episodes, key = Episode::key) { episode ->
+            val viewing = s.viewing.firstOrNull { it.title.key == title.key && it.episode?.key == episode.key }
+            EpisodeRow(episode, viewing, s.episode?.key == episode.key,
+                modifier = Modifier.padding(horizontal = 24.dp), enabled = !s.loading) { vm.play(episode) }
         }
     }
 }

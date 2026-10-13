@@ -29,7 +29,7 @@ import androidx.tv.material3.Text
 @Composable internal fun EpisodeRow(episode: Episode, viewing: Viewing?, current: Boolean, modifier: Modifier = Modifier,
     enabled: Boolean = true, click: () -> Unit) {
     val state = episodeState(viewing)
-    val label = stringResource(R.string.episode, episode.number, episode.name)
+    val label = episodeLabel(episode)
     val description = listOf(label, if (current) stringResource(R.string.now_playing) else "", state.label)
         .filter(String::isNotBlank).joinToString(" · ")
     FocusFrame(
@@ -64,7 +64,7 @@ import androidx.tv.material3.Text
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
-                        episode.number.toString(),
+                        episode.displayNumber,
                         color = if (current) Accent else TextSecondary,
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Bold,

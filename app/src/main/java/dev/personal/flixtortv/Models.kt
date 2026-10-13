@@ -1,21 +1,27 @@
 package dev.personal.flixtortv
 
+enum class ContentSource { FLIXTOR, HIANIME }
+enum class ContentType { MOVIE, SERIES }
+enum class AnimeVersion(val wire: String) { DUB("dub"), SUB("sub") }
+
 data class Title(
     val id: String, val path: String, val name: String,
     val poster: String = "", val year: String = "", val rating: String = "",
     val genres: String = "", val synopsis: String = "", val backdrop: String = "",
     val imdb: String = "",
+    val source: ContentSource = ContentSource.FLIXTOR, val type: ContentType? = null,
 ) {
-    val isSeries get() = path.startsWith("/watch/tv/")
-    val key get() = "${if (isSeries) "t" else "m"}:$id"
+    val isSeries get() = type?.let { it == ContentType.SERIES } ?: path.startsWith("/watch/tv/")
+    val key get() = (if (source == ContentSource.FLIXTOR) "" else "hianime:") + "${if (isSeries) "t" else "m"}:$id"
 }
 data class Shelf(val label: String, val titles: List<Title>)
-data class Episode(val season: Int, val number: Int, val name: String) {
-    val key get() = "$season:$number"
+data class Episode(val season: Int, val number: Int, val name: String,
+    val providerId: String = "", val displayNumber: String = number.toString(), val order: Int? = null) {
+    val key get() = if (providerId.isBlank()) "$season:$number" else "anime:$providerId"
 }
 data class Detail(val title: Title, val episodes: List<Episode>) {
     /** Canonical watch order. The service lists newest first; playback must not. */
-    val ordered: List<Episode> get() = episodes.sortedWith(compareBy(Episode::season, Episode::number))
+    val ordered: List<Episode> get() = episodes.sortedWith(compareBy<Episode> { it.season }.thenBy { it.order ?: it.number })
     fun next(episode: Episode?): Episode? {
         val list = ordered
         val index = if (episode == null) -1 else list.indexOfFirst { it.key == episode.key }
@@ -23,15 +29,18 @@ data class Detail(val title: Title, val episodes: List<Episode>) {
     }
 }
 data class Caption(val uri: String, val label: String, val mime: String, val default: Boolean)
-data class Stream(val uri: String, val captions: List<Caption>)
+data class Stream(val uri: String, val captions: List<Caption>,
+    val headers: Map<String, String> = mapOf("Referer" to SiteParser.BASE + "/"),
+    val mime: String = "application/x-mpegURL")
 data class PairCode(val code: String, val url: String)
 enum class AccountStatus { CHECKING, GUEST, SIGNED_IN, VIP, EXPIRED, UNAVAILABLE }
 data class Account(val status: AccountStatus) {
     constructor(signedIn: Boolean) : this(if (signedIn) AccountStatus.SIGNED_IN else AccountStatus.GUEST)
     val signedIn get() = status == AccountStatus.SIGNED_IN || status == AccountStatus.VIP
 }
-data class Viewing(val title: Title, val episode: Episode?, val position: Long, val duration: Long) {
-    val key get() = title.key + (episode?.let { ":${it.key}" } ?: "")
+data class Viewing(val title: Title, val episode: Episode?, val position: Long, val duration: Long,
+    val version: AnimeVersion? = null) {
+    val key get() = playbackKey(title, episode, version)
     /** Watched fraction, 0f when the duration is still unknown and 1f once finished. */
     val fraction get() = if (duration <= 0) 0f else if (position >= duration - 30000) 1f
         else (position.toFloat() / duration).coerceIn(0f, 1f)
@@ -79,4 +88,6 @@ data class Segments(val imdbId: String, val items: List<SkipSegment> = emptyList
             (it.endMs.toFloat() / durationMs).coerceIn(0f, 1f)) }
     }
 }
-data class PlaybackIdentity(val profileId: String, val title: Title, val episode: Episode?)
+data class PlaybackIdentity(val profileId: String, val title: Title, val episode: Episode?, val version: AnimeVersion? = null)
+internal fun playbackKey(title: Title, episode: Episode?, version: AnimeVersion?) =
+    title.key + (episode?.let { ":${it.key}" } ?: "") + (version?.let { ":${it.wire}" } ?: "")

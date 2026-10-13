@@ -75,6 +75,7 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
     val playbackToken = remember(stream) { vm.watchingSession.token }
     val lifecycleState by lifecycle.currentStateFlow.collectAsState()
     val awaitingConfirmation = state.stillWatchingSeconds != null
+    val choosingVersion = state.animeChoice != null
     var failure by remember(stream) { mutableStateOf<Failure?>(null) }
     var buffering by remember(stream) { mutableStateOf(!vm.watchingSession.finished) }
     var controls by remember(stream) { mutableStateOf(true) }
@@ -122,8 +123,8 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
     val showSkip = skippable != null && failure == null && !settings && !episodesOpen && !ended && !awaitingConfirmation
     val skipVisible by rememberUpdatedState(showSkip)
     val player = remember(stream) {
-        val http = OkHttpDataSource.Factory(vm.client.mediaClient).setUserAgent(FlixtorClient.USER_AGENT)
-            .setDefaultRequestProperties(mapOf("Referer" to SiteParser.BASE + "/"))
+        val http = OkHttpDataSource.Factory(if (state.detail?.title?.source == ContentSource.HIANIME) vm.anime.mediaClient else vm.client.mediaClient).setUserAgent(FlixtorClient.USER_AGENT)
+            .setDefaultRequestProperties(stream.headers)
         ExoPlayer.Builder(context)
             .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(context, http)))
             .setSeekBackIncrementMs(10000).setSeekForwardIncrementMs(10000).build().apply {
@@ -131,7 +132,7 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
                 val subtitles = stream.captions.map { caption -> MediaItem.SubtitleConfiguration.Builder(android.net.Uri.parse(caption.uri))
                     .setMimeType(caption.mime).setLabel(caption.label)
                     .setSelectionFlags(if (caption.default) C.SELECTION_FLAG_DEFAULT else 0).build() }
-                val item = MediaItem.Builder().setUri(stream.uri).setMimeType(MimeTypes.APPLICATION_M3U8)
+                val item = MediaItem.Builder().setUri(stream.uri).setMimeType(stream.mime)
                     .setSubtitleConfigurations(subtitles).setMediaMetadata(MediaMetadata.Builder().setTitle(state.detail?.title?.name).build()).build()
                 setMediaItem(item, state.resumePosition)
                 if (!vm.watchingSession.finished) prepare()
@@ -153,7 +154,7 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
             override fun onPlayerError(error: PlaybackException) {
                 val http = generateSequence(error.cause) { it.cause }.filterIsInstance<HttpDataSource.InvalidResponseCodeException>().firstOrNull()
                 failure = when {
-                    http?.responseCode == 401 -> Failure.SIGNED_OUT
+                    http?.responseCode == 401 -> if (vm.isAnime) Failure.ACCESS else Failure.SIGNED_OUT
                     http?.responseCode == 403 -> Failure.ACCESS
                     http?.responseCode == 429 || (http?.responseCode ?: 0) >= 500 -> Failure.UNAVAILABLE
                     error.errorCode in listOf(PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
@@ -184,7 +185,7 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
                 val key = androidx.core.content.IntentCompat.getParcelableExtra(intent,
                     android.content.Intent.EXTRA_KEY_EVENT, KeyEvent::class.java)
                 if (key?.action == KeyEvent.ACTION_DOWN) vm.recordPlaybackInteraction()
-                return vm.watchingSession.pending
+                return vm.watchingSession.pending || vm.state.value.animeChoice != null
             }
             @Suppress("OVERRIDE_DEPRECATION") // Media3 1.4.1 command gate keeps pending confirmation authoritative.
             override fun onPlayerCommandRequest(session: MediaSession, controller: MediaSession.ControllerInfo,
@@ -199,7 +200,7 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
                     Player.COMMAND_SET_SPEED_AND_PITCH, Player.COMMAND_SET_TRACK_SELECTION_PARAMETERS)
                 if (transport) {
                     vm.recordPlaybackInteraction()
-                    if (vm.watchingSession.pending) return SessionError.ERROR_INVALID_STATE
+                    if (vm.watchingSession.pending || vm.state.value.animeChoice != null) return SessionError.ERROR_INVALID_STATE
                 }
                 return SessionResult.RESULT_SUCCESS
             }
@@ -230,20 +231,31 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
             if (++tick % 10 == 0 && player.isPlaying) identity?.let { vm.saveProgress(it, position, duration) }
         }
     }
+    var resumeAfterChoice by remember(stream) { mutableStateOf(false) }
+    LaunchedEffect(player, choosingVersion) {
+        if (choosingVersion) {
+            resumeAfterChoice = player.playWhenReady
+            identity?.let { vm.saveProgress(it, player.currentPosition, player.duration) }
+            player.pause()
+        } else if (resumeAfterChoice) {
+            resumeAfterChoice = false
+            if (lifecycleState == Lifecycle.State.RESUMED && !ended && !awaitingConfirmation) player.play()
+        }
+    }
     LaunchedEffect(controls, settings, episodesOpen, interaction, failure, playing, preview, ended, skipFocused) {
         if (controls && !settings && !episodesOpen && !ended && preview == null && failure == null && playing && !skipFocused) {
             delay(6000); controls = false
         }
     }
-    val autoplay = state.profile?.autoplay != false
+    val autoplay = state.profile?.autoplay != false && !state.animeAutoplayBlocked
     val next = state.detail?.next(state.episode)
     // Autoplay drives only the next episode; skip segments are always manual, like Netflix.
     fun skip(segment: SkipSegment) {
         skipped.add(segment.type.read)
         player.seekTo(segment.endMs)
     }
-    LaunchedEffect(ended, next?.key, autoplay, awaitingConfirmation, lifecycleState) {
-        if (!ended || next == null || !autoplay || awaitingConfirmation || lifecycleState != Lifecycle.State.RESUMED) return@LaunchedEffect
+    LaunchedEffect(ended, next?.key, autoplay, awaitingConfirmation, lifecycleState, choosingVersion) {
+        if (!ended || next == null || !autoplay || awaitingConfirmation || choosingVersion || lifecycleState != Lifecycle.State.RESUMED) return@LaunchedEffect
         countdown = NEXT_EPISODE_SECONDS
         while (countdown > 0) { delay(1000); countdown-- }
         vm.autoplayNext(playbackToken, next)
@@ -354,7 +366,7 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
                             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                                 Text(stringResource(R.string.next_episode), color = TextPrimary, fontSize = 28.sp,
                                     fontWeight = FontWeight.Bold)
-                                Text(stringResource(R.string.episode, next.number, next.name), color = TextSecondary,
+                                Text(episodeLabel(next), color = TextSecondary,
                                     fontSize = 18.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                                 if (autoplay) Text(stringResource(R.string.next_episode_in, countdown), color = Accent,
                                     modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
@@ -380,8 +392,9 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
                             Text(state.detail?.title?.name.orEmpty(), color = TextPrimary, fontSize = 24.sp, lineHeight = 30.sp,
                                 fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             state.episode?.let {
-                                MetadataRow(modifier = Modifier.padding(top = 1.dp), items = listOf(stringResource(R.string.episode, it.number, it.name)))
+                                MetadataRow(modifier = Modifier.padding(top = 1.dp), items = listOf(episodeLabel(it)))
                             }
+                            state.version?.let { Text(animeVersionLabel(it), color = TextSecondary, fontSize = 13.sp) }
                             val shownPosition = preview ?: position
                             val fraction = if (duration > 0) (shownPosition.toFloat() / duration).coerceIn(0f, 1f) else 0f
                             val timelineLabel = stringResource(R.string.timeline)
@@ -436,8 +449,9 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
                                 }
                             }
                             failure?.let {
-                                if (it == Failure.VIP) AccessMessage(state.account) else FailureMessage(it, vm::refresh, Modifier.focusRequester(playFocus))
-                                if (it in listOf(Failure.SIGNED_OUT, Failure.EXPIRED, Failure.VIP, Failure.CAPACITY)) Action(stringResource(R.string.sign_in), if (it == Failure.VIP) Modifier.focusRequester(playFocus) else Modifier) { vm.signInForPlayback() }
+                                if (it == Failure.VIP && !vm.isAnime) AccessMessage(state.account) else ContentFailure(it, vm, Modifier.focusRequester(playFocus))
+                                if (vm.isAnime) Action(stringResource(R.string.anime_change_version)) { vm.play(state.episode) }
+                                if (!vm.isAnime && it in listOf(Failure.SIGNED_OUT, Failure.EXPIRED, Failure.VIP, Failure.CAPACITY)) Action(stringResource(R.string.sign_in), if (it == Failure.VIP) Modifier.focusRequester(playFocus) else Modifier) { vm.signInForPlayback() }
                             }
                         }
                     }
@@ -533,9 +547,9 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
                         LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(vertical = 4.dp)) {
                             item {
                                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(stringResource(R.string.skip_segments_help), color = Muted, fontSize = 13.sp)
+                    Text(stringResource(if (vm.isAnime) R.string.anime_skip_help else R.string.skip_segments_help), color = Muted, fontSize = 13.sp)
                     val imdbId = vm.imdbId()
-                    Field(stringResource(R.string.imdb_id), imdbId.orEmpty(), { vm.setImdbId(it.take(12)) })
+                    if (!vm.isAnime) Field(stringResource(R.string.imdb_id), imdbId.orEmpty(), { vm.setImdbId(it.take(12)) })
                     if (state.segmentsLoading) Text(stringResource(R.string.loading), color = Muted, fontSize = 13.sp)
                     if (state.segments?.none == true && !state.segmentsLoading) {
                         Text(stringResource(R.string.no_segments), color = Muted, fontSize = 13.sp)
@@ -559,12 +573,12 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
                     Text(stringResource(if (marking != null) R.string.segment_marking else R.string.segment_mark_help),
                         color = if (marking != null) Accent else Muted, fontSize = 13.sp,
                         modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
-                    Text(stringResource(if (vm.canSubmit) R.string.introdb_key_stored else R.string.introdb_key_unavailable),
+                    if (!vm.isAnime) Text(stringResource(if (vm.canSubmit) R.string.introdb_key_stored else R.string.introdb_key_unavailable),
                         color = if (vm.canSubmit) Accent else Muted, fontSize = 13.sp)
                     Action(stringResource(R.string.segment_clear), enabled = vm.markedSegments().isNotEmpty()) {
                         SegmentType.entries.forEach(vm::clearMarked)
                     }
-                    Action(stringResource(R.string.segment_submit), enabled = vm.markedSegments().isNotEmpty() && vm.canSubmit) { vm.submitSegments() }
+                    if (!vm.isAnime) Action(stringResource(R.string.segment_submit), enabled = vm.markedSegments().isNotEmpty() && vm.canSubmit) { vm.submitSegments() }
                                 }
                             }
                         }
@@ -587,10 +601,10 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
                     variant = GlassButtonVariant.SECONDARY, compact = true, onClick = ::closeDrawer)
                 SeasonPicker(seasons, activeSeason, modifier = Modifier.padding(top = 14.dp)) { picked = it }
                 LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(episodes.filter { it.season == activeSeason }.sortedBy { it.number }, key = Episode::key) { episode ->
-                        val viewing = state.viewing.firstOrNull { it.title.key == title?.key && it.episode?.key == episode.key }
+                    items(episodes.filter { it.season == activeSeason }, key = Episode::key) { episode ->
+                        val viewing = state.viewing.firstOrNull { it.title.key == title?.key && it.episode?.key == episode.key && it.version == state.version }
                         EpisodeRow(episode, viewing, state.episode?.key == episode.key) {
-                            drawer = null
+                            if (!vm.isAnime) drawer = null
                             vm.play(episode)
                         }
                     }

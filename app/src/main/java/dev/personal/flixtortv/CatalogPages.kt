@@ -3,7 +3,6 @@ package dev.personal.flixtortv
 import java.io.File
 import java.util.UUID
 import org.json.JSONArray
-import org.json.JSONObject
 
 /** Session-scoped disk pages. Only eight decoded pages are retained; keys stay stable. */
 internal class CatalogPages(root: File) {
@@ -20,8 +19,7 @@ internal class CatalogPages(root: File) {
         val unique = titles.filter { it.key !in seen }.distinctBy(Title::key)
         if (unique.isNotEmpty()) {
             val number = page
-            val json = JSONArray(unique.map { t -> JSONObject().put("id", t.id).put("path", t.path).put("name", t.name)
-                .put("poster", t.poster).put("year", t.year).put("rating", t.rating).put("genres", t.genres) })
+            val json = JSONArray(unique.map(ContentJson::title))
             File(directory, "$number.json").writeText(json.toString())
             page++
             cache[number] = unique
@@ -32,10 +30,7 @@ internal class CatalogPages(root: File) {
     @Synchronized private fun getTitle(index: Int): Title {
         val (number, offset) = locations[index]
         val titles = cache[number] ?: JSONArray(File(directory, "$number.json").readText()).let { array ->
-            (0 until array.length()).map { i -> array.getJSONObject(i).let { t ->
-                Title(t.getString("id"), t.getString("path"), t.getString("name"), t.optString("poster"),
-                    t.optString("year"), t.optString("rating"), t.optString("genres"))
-            } }.also { cache[number] = it }
+            (0 until array.length()).map { i -> ContentJson.title(array.getJSONObject(i)) }.also { cache[number] = it }
         }
         return titles[offset]
     }

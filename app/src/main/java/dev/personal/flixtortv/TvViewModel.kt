@@ -15,8 +15,11 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-enum class Screen { PROFILES, HOME, MOVIES, SHOWS, SEARCH, LIST, ACCOUNT, DETAIL, PLAYER }
+enum class Screen { PROFILES, HOME, MOVIES, SHOWS, ANIME, SEARCH, LIST, ACCOUNT, DETAIL, PLAYER }
 enum class SettingsEntry { ROOT, ACCOUNT }
+data class AnimeChoice(val episode: Episode?, val resume: Boolean, val automatic: Boolean,
+    val available: Set<AnimeVersion> = emptySet(), val loading: Boolean = true,
+    val failure: Failure? = null, val missing: AnimeVersion? = null, val preferred: AnimeVersion? = null)
 
 data class TvState(
     val settingsEntry: SettingsEntry = SettingsEntry.ROOT,
@@ -36,10 +39,13 @@ data class TvState(
     val screenFit: ScreenFit = ScreenFit(),
     val segments: Segments? = null, val segmentsLoading: Boolean = false,
     val stillWatchingSeconds: Int? = null,
+    val animeQuery: String = "", val version: AnimeVersion? = null, val animeChoice: AnimeChoice? = null,
+    val animeAutoplayBlocked: Boolean = false,
 )
 class TvViewModel @JvmOverloads constructor(app: Application,
     val client: FlixtorClient = FlixtorClient(SessionStore(app)),
-    private val introDb: IntroDbClient = IntroDbClient()) : AndroidViewModel(app) {
+    private val introDb: IntroDbClient = IntroDbClient(),
+    val anime: AnimeClient = AnimeClient()) : AndroidViewModel(app) {
     val updates = UpdateService(app)
     private val profiles = ProfileStore(app)
     private var library = LibraryStore(app)
@@ -55,6 +61,10 @@ class TvViewModel @JvmOverloads constructor(app: Application,
     private var pairing: Job? = null
     private var origin = Screen.HOME
     private var pendingPlayback: Pair<Detail, Episode?>? = null
+    private var animeChoiceJob: Job? = null
+    private var animeChoiceRequest = 0L
+    val isAnime get() = mutable.value.screen == Screen.ANIME ||
+        (mutable.value.screen in listOf(Screen.DETAIL, Screen.PLAYER) && mutable.value.detail?.title?.source == ContentSource.HIANIME)
     internal var watchingSession = WatchingSession(SystemClock::elapsedRealtime)
     internal fun recordPlaybackInteraction() {
         if (mutable.value.screen != Screen.PLAYER) return
@@ -82,7 +92,7 @@ class TvViewModel @JvmOverloads constructor(app: Application,
     internal fun autoplayNext(token: Long, episode: Episode) {
         val state = mutable.value
         if (token != watchingSession.token || !watchingSession.finished || state.screen != Screen.PLAYER ||
-            state.profile?.autoplay == false || state.failure != null || state.detail?.next(state.episode)?.key != episode.key) return
+            state.profile?.autoplay == false || state.failure != null || state.animeChoice != null || state.animeAutoplayBlocked || state.detail?.next(state.episode)?.key != episode.key) return
         if (watchingSession.requireConfirmation(token)) { publishWatchingPrompt(); return }
         startPlayback(episode, resume = true, automatic = true)
     }
@@ -90,7 +100,7 @@ class TvViewModel @JvmOverloads constructor(app: Application,
         if (!watchingSession.pending || mutable.value.screen != Screen.PLAYER) return
         val next = nextEpisode() ?: run { back(); return }
         watchingSession.reset()
-        play(next)
+        startPlayback(next, resume = true, automatic = true)
     }
     init { viewModelScope.launch { while (true) { updates.check(); delay(6L * 60 * 60 * 1000) } } }
     private fun update(transform: (TvState) -> TvState) { mutable.value = transform(mutable.value) }
@@ -107,6 +117,7 @@ class TvViewModel @JvmOverloads constructor(app: Application,
         val operation = mutable.value.screen.name
         update { it.copy(loading = false, failure = failure, failureOperation = operation,
             account = when {
+                isAnime -> it.account
                 failure == Failure.SIGNED_OUT -> Account(false)
                 failure == Failure.EXPIRED -> Account(AccountStatus.EXPIRED)
                 failure == Failure.CAPACITY && !it.account.signedIn -> Account(false)
@@ -118,13 +129,14 @@ class TvViewModel @JvmOverloads constructor(app: Application,
     fun checkUpdates(structural: Boolean = false) { viewModelScope.launch {
         updates.check(if (structural) fingerprint() else null)
     } }
-    fun fingerprint() = mutable.value.failureOperation.lowercase() + ".response-v1"
+    fun fingerprint() = (if (isAnime) "hianime." else "") + mutable.value.failureOperation.lowercase() + ".response-v1"
     fun report() { viewModelScope.launch { updates.report(mutable.value.failureOperation, fingerprint()) } }
     fun installUpdate() { if (mutable.value.screen != Screen.PLAYER) viewModelScope.launch { updates.install() } }
-    override fun onCleared() { catalogJob?.cancel(); segmentsJob?.cancel(); pages.close(); updates.close(); client.close(); super.onCleared() }
+    override fun onCleared() { animeChoiceJob?.cancel(); anime.close(); catalogJob?.cancel(); segmentsJob?.cancel(); pages.close(); updates.close(); client.close(); super.onCleared() }
     private fun enter(id: String) {
         val profile = profiles.all().firstOrNull { it.id == id } ?: return
         watchingSession.reset()
+        cancelAnimeChoice()
         work?.cancel(); catalogJob?.cancel(); stopPairing(); pendingPlayback = null
         library = LibraryStore(getApplication(), id)
         update { TvState(screen = Screen.HOME, profiles = profiles.all(), profile = profile,
@@ -158,6 +170,8 @@ class TvViewModel @JvmOverloads constructor(app: Application,
     /** Community data needs an IMDb id; without one only viewer-marked segments apply. */
     fun imdbId(): String? {
         val title = mutable.value.detail?.title ?: return null
+        // Anime numbering and audio cuts are not verified IntroDB mappings.
+        if (title.source == ContentSource.HIANIME) return null
         return skipStore.imdbId(title)?.takeIf { it.isNotBlank() } ?: title.imdb.takeIf { it.isNotBlank() }
     }
 
@@ -171,7 +185,7 @@ class TvViewModel @JvmOverloads constructor(app: Application,
     /** Viewer-marked segments always win, then community data fills the gaps. */
     fun effectiveSegments(): Segments? {
         val detail = mutable.value.detail ?: return null
-        val marked = skipStore.segments(detail.title, mutable.value.episode)
+        val marked = skipStore.segments(detail.title, mutable.value.episode, mutable.value.version)
         val remote = mutable.value.segments?.items.orEmpty()
         if (marked.isEmpty() && remote.isEmpty()) return null
         val merged = SegmentType.entries.mapNotNull { type ->
@@ -204,24 +218,24 @@ class TvViewModel @JvmOverloads constructor(app: Application,
         val detail = mutable.value.detail ?: return
         val start = startMs.coerceAtLeast(0)
         val segment = SkipSegment(type, start, endMs.coerceAtLeast(start + 1000))
-        skipStore.setSegment(detail.title, mutable.value.episode, segment)
+        skipStore.setSegment(detail.title, mutable.value.episode, segment, mutable.value.version)
         update { it.copy(segments = effectiveSegments()) }
     }
 
     fun clearMarked(type: SegmentType) {
         val detail = mutable.value.detail ?: return
-        val remaining = skipStore.segments(detail.title, mutable.value.episode).filterNot { it.type == type }
-        skipStore.setSegments(detail.title, mutable.value.episode, remaining)
+        val remaining = skipStore.segments(detail.title, mutable.value.episode, mutable.value.version).filterNot { it.type == type }
+        skipStore.setSegments(detail.title, mutable.value.episode, remaining, mutable.value.version)
         update { it.copy(segments = effectiveSegments()) }
     }
 
     fun markedSegments(): List<SkipSegment> {
         val detail = mutable.value.detail ?: return emptyList()
-        return skipStore.segments(detail.title, mutable.value.episode)
+        return skipStore.segments(detail.title, mutable.value.episode, mutable.value.version)
     }
 
     /** Contributing is available only when the build supplied an IntroDB key. */
-    val canSubmit get() = introDbConfigured
+    val canSubmit get() = introDbConfigured && !isAnime
 
     /** Contributes viewer-marked segments. Returns false when a key or IMDb id is missing. */
     fun submitSegments(): Boolean {
@@ -249,6 +263,7 @@ class TvViewModel @JvmOverloads constructor(app: Application,
         val list = profiles.delete(id)
         if (mutable.value.profile?.id == id) {
             watchingSession.reset()
+            cancelAnimeChoice()
             work?.cancel(); catalogJob?.cancel(); stopPairing(); pendingPlayback = null
             library = LibraryStore(getApplication(), list.first().id)
             update { TvState(screen = Screen.PROFILES, profiles = list, account = it.account, accountChecked = it.accountChecked, screenFit = it.screenFit) }
@@ -260,6 +275,7 @@ class TvViewModel @JvmOverloads constructor(app: Application,
         update { it.copy(profiles = list, profile = list.first { p -> p.id == id }) }
     }
     fun signInForPlayback() {
+        if (isAnime) return
         mutable.value.detail?.let { pendingPlayback = it to mutable.value.episode }
         openAccountSettings()
     }
@@ -273,12 +289,13 @@ class TvViewModel @JvmOverloads constructor(app: Application,
     fun navigate(screen: Screen) { navigateTo(screen, SettingsEntry.ROOT) }
     private fun navigateTo(screen: Screen, settingsEntry: SettingsEntry) {
         watchingSession.reset()
+        cancelAnimeChoice()
         if (screen != Screen.ACCOUNT) pendingPlayback = null
         work?.cancel(); catalogJob?.cancel(); stopPairing()
         update { it.copy(screen = screen, settingsEntry = settingsEntry, failure = null, titles = emptyList(), page = 1, hasMore = true,
             settingsNavigationId = it.settingsNavigationId + if (screen == Screen.ACCOUNT) 1 else 0,
             detail = null, stream = null, loading = false, appending = false, appendFailure = null, focusedKey = null,
-            segments = null, segmentsLoading = false, stillWatchingSeconds = null) }
+            segments = null, segmentsLoading = false, stillWatchingSeconds = null, version = null, animeAutoplayBlocked = false) }
         refresh()
     }
     fun refresh() {
@@ -299,7 +316,7 @@ class TvViewModel @JvmOverloads constructor(app: Application,
                 } catch (cancel: CancellationException) { throw cancel }
                 catch (_: Exception) { /* The catalogue remains usable without enriched hero artwork. */ }
             }
-            Screen.MOVIES, Screen.SHOWS -> browse(false)
+            Screen.MOVIES, Screen.SHOWS, Screen.ANIME -> browse(false)
             Screen.SEARCH -> search(mutable.value.query, false)
             Screen.LIST -> update { it.copy(favorites = library.favorites(), viewing = library.viewing(), loading = false) }
             Screen.ACCOUNT -> {
@@ -307,7 +324,10 @@ class TvViewModel @JvmOverloads constructor(app: Application,
                 load { val account = client.account(); ensureActive(); update { it.copy(account = account, accountChecked = true) } }
             }
             Screen.DETAIL -> mutable.value.detail?.title?.let(::open)
-            Screen.PLAYER -> play(mutable.value.episode, true)
+            Screen.PLAYER -> {
+                val state = mutable.value
+                startPlayback(state.episode, true, false, state.version)
+            }
         }
     }
     fun setScreenFit(fit: ScreenFit) { fitStore.save(fit); update { it.copy(screenFit = fit) } }
@@ -325,11 +345,16 @@ class TvViewModel @JvmOverloads constructor(app: Application,
         if (!more) update { it.copy(query = query.take(64)) }
         catalog(more)
     }
+    fun searchAnime(query: String) {
+        update { it.copy(animeQuery = query.take(64)) }
+        catalog(false)
+    }
     private fun catalog(more: Boolean) {
         val before = mutable.value
-        if (before.screen !in listOf(Screen.MOVIES, Screen.SHOWS, Screen.SEARCH)) return
+        if (before.screen !in listOf(Screen.MOVIES, Screen.SHOWS, Screen.SEARCH, Screen.ANIME)) return
         if (more && (before.loading || before.appending || !before.hasMore)) return
-        val key = listOf(before.profile?.id, before.screen, before.sort, before.query.trim()).joinToString("|")
+        val query = if (before.screen == Screen.ANIME) before.animeQuery.trim() else before.query.trim()
+        val key = listOf(before.profile?.id, before.screen, before.sort, query).joinToString("|")
         if (!more) {
             work?.cancel(); catalogJob?.cancel()
             pages.close(); pages = CatalogPages(catalogRoot)
@@ -344,8 +369,9 @@ class TvViewModel @JvmOverloads constructor(app: Application,
             titles = if (more) it.titles else emptyList()) }
         catalogJob = viewModelScope.launch {
             try {
-                if (!more && before.screen == Screen.SEARCH) delay(350)
-                val result = if (before.screen == Screen.SEARCH) client.search(before.query.trim(), page)
+                if (!more && before.screen in listOf(Screen.SEARCH, Screen.ANIME)) delay(350)
+                val result = if (before.screen == Screen.ANIME) anime.browse(query, page)
+                    else if (before.screen == Screen.SEARCH) client.search(query, page)
                     else client.browse(before.screen == Screen.SHOWS, page, before.sort)
                 ensureActive()
                 val list = withContext(Dispatchers.IO) { storage.append(result) }
@@ -362,18 +388,25 @@ class TvViewModel @JvmOverloads constructor(app: Application,
         }
     }
     fun open(title: Title) = openFrom(title, title.key)
-    fun openFrom(title: Title, location: String) {
+    fun openFrom(title: Title, location: String, playMovie: Boolean = false) {
         watchingSession.reset()
+        cancelAnimeChoice()
         pendingPlayback = null
         val previous = mutable.value
         if (previous.screen != Screen.DETAIL) origin = previous.screen
         catalogJob?.cancel()
         stopPairing()
         update { it.copy(screen = Screen.DETAIL, appending = false, detail = Detail(title, emptyList()),
-            focusedKey = if (previous.screen == Screen.DETAIL) previous.focusedKey else location, stream = null, stillWatchingSeconds = null) }
-        load { val detail = client.detail(title); ensureActive(); update { it.copy(detail = detail) } }
+            focusedKey = if (previous.screen == Screen.DETAIL) previous.focusedKey else location, stream = null, stillWatchingSeconds = null,
+            version = null, episode = null, segments = null, animeAutoplayBlocked = false) }
+        load {
+            val detail = if (title.source == ContentSource.HIANIME) anime.detail(title) else client.detail(title)
+            ensureActive(); update { it.copy(detail = detail) }
+            if (playMovie) requestAnimeChoice(null, true, false)
+        }
     }
     fun back(): Boolean {
+        if (mutable.value.animeChoice != null) { cancelAnimeChoice(); return true }
         return when (mutable.value.screen) {
             Screen.PLAYER -> {
                 work?.cancel(); segmentsJob?.cancel()
@@ -401,19 +434,69 @@ class TvViewModel @JvmOverloads constructor(app: Application,
     }
     fun play(episode: Episode?, resume: Boolean = true) {
         if (watchingSession.pending) return
+        if (isAnime) { requestAnimeChoice(episode, resume, false); return }
         startPlayback(episode, resume, automatic = false)
     }
-    private fun startPlayback(episode: Episode?, resume: Boolean, automatic: Boolean) {
+    private fun startPlayback(episode: Episode?, resume: Boolean, automatic: Boolean, version: AnimeVersion? = null) {
         val title = mutable.value.detail?.title ?: return
+        if (title.source == ContentSource.HIANIME && version == null) {
+            requestAnimeChoice(episode, resume, automatic, if (automatic) mutable.value.version else null)
+            return
+        }
         watchingSession.start(automatic)
-        val previous = library.viewing().firstOrNull { it.title.key == title.key && it.episode?.key == episode?.key }
+        val previous = library.viewing().firstOrNull { it.key == playbackKey(title, episode, version) }
         val position = if (resume && previous != null && (previous.duration <= 0 || previous.position < previous.duration - 30000)) previous.position else 0
         update { it.copy(screen = Screen.PLAYER, episode = episode, stream = null, resumePosition = position, stillWatchingSeconds = null,
-            playbackIdentity = it.profile?.let { profile -> PlaybackIdentity(profile.id, title, episode) }) }
+            version = version, animeChoice = null, segments = null, animeAutoplayBlocked = false,
+            playbackIdentity = it.profile?.let { profile -> PlaybackIdentity(profile.id, title, episode, version) }) }
         loadSegments()
-        load { val stream = client.playback(title, episode); ensureActive(); update { it.copy(stream = stream) } }
+        load {
+            val stream = if (title.source == ContentSource.HIANIME)
+                anime.playback(episode ?: mutable.value.detail!!.ordered.first(), version!!)
+                else client.playback(title, episode)
+            ensureActive(); update { it.copy(stream = stream) }
+        }
+    }
+    fun cancelAnimeChoice() {
+        animeChoiceRequest++; animeChoiceJob?.cancel(); animeChoiceJob = null
+        update { it.copy(animeChoice = null, animeAutoplayBlocked = it.animeAutoplayBlocked ||
+            (it.animeChoice != null && (it.animeChoice.automatic || watchingSession.finished))) }
+    }
+    fun retryAnimeChoice() {
+        val choice = mutable.value.animeChoice ?: return
+        requestAnimeChoice(choice.episode, choice.resume, choice.automatic, choice.preferred)
+    }
+    private fun requestAnimeChoice(episode: Episode?, resume: Boolean, automatic: Boolean, preferred: AnimeVersion? = null) {
+        val detail = mutable.value.detail ?: return
+        if (detail.title.source != ContentSource.HIANIME) return
+        cancelAnimeChoice()
+        val request = animeChoiceRequest
+        val target = episode ?: detail.ordered.firstOrNull()
+        val choice = AnimeChoice(episode, resume, automatic, preferred = preferred)
+        update { it.copy(animeChoice = choice) }
+        animeChoiceJob = viewModelScope.launch {
+            try {
+                val available = target?.let { anime.servers(it).keys } ?: emptySet()
+                ensureActive()
+                if (request != animeChoiceRequest) return@launch
+                update { it.copy(animeChoice = choice.copy(loading = false, available = available,
+                    missing = preferred?.takeIf { version -> version !in available })) }
+                if (preferred != null && preferred in available) chooseAnimeVersion(preferred)
+            } catch (cancel: CancellationException) { throw cancel }
+            catch (error: Exception) {
+                if (request == animeChoiceRequest) update { it.copy(animeChoice = choice.copy(loading = false,
+                    failure = (error as? SiteException)?.failure ?: Failure.CHANGED)) }
+            }
+        }
+    }
+    fun chooseAnimeVersion(version: AnimeVersion) {
+        val choice = mutable.value.animeChoice ?: return
+        if (choice.loading || choice.failure != null || version !in choice.available) return
+        update { it.copy(animeChoice = null) }
+        startPlayback(choice.episode, choice.resume, choice.automatic, version)
     }
     fun playTitle(title: Title) {
+        if (title.source == ContentSource.HIANIME) { openFrom(title, "hero", !title.isSeries); return }
         if (title.isSeries) {
             openFrom(title, "hero")
             return
@@ -444,7 +527,7 @@ class TvViewModel @JvmOverloads constructor(app: Application,
     fun saveProgress(identity: PlaybackIdentity, position: Long, duration: Long) {
         if (profiles.all().none { it.id == identity.profileId }) return
         LibraryStore(getApplication(), identity.profileId).save(Viewing(identity.title, identity.episode,
-            position.coerceAtLeast(0), duration.coerceAtLeast(0)))
+            position.coerceAtLeast(0), duration.coerceAtLeast(0), identity.version))
     }
     fun playerFailure(failure: Failure) = fail(failure)
     fun login(email: String, password: String) = load {

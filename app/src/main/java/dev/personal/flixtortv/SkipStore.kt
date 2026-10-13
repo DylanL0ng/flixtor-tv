@@ -29,8 +29,8 @@ class SkipStore(context: Context) {
 
     // --- Viewer-marked segments ----------------------------------------------
 
-    fun segments(title: Title, episode: Episode?): List<SkipSegment> {
-        val raw = prefs.getString(markedKey(title.key, episode?.key), null) ?: return emptyList()
+    fun segments(title: Title, episode: Episode?, version: AnimeVersion? = null): List<SkipSegment> {
+        val raw = prefs.getString(markedKey(title, episode, version), null) ?: return emptyList()
         return runCatching {
             val array = JSONArray(raw)
             (0 until array.length()).map { array.getJSONObject(it) }.mapNotNull { value ->
@@ -42,20 +42,21 @@ class SkipStore(context: Context) {
         }.getOrDefault(emptyList())
     }
 
-    fun setSegments(title: Title, episode: Episode?, segments: List<SkipSegment>) {
-        val key = markedKey(title.key, episode?.key)
+    fun setSegments(title: Title, episode: Episode?, segments: List<SkipSegment>, version: AnimeVersion? = null) {
+        val key = markedKey(title, episode, version)
         if (segments.isEmpty()) { prefs.edit().remove(key).apply(); return }
         val values = JSONArray(segments.map { JSONObject().put("type", it.type.read).put("start", it.startMs).put("end", it.endMs) })
         prefs.edit().putString(key, values.toString()).apply()
     }
 
     /** Replaces one segment of a type, or removes that type when the segment is null. */
-    fun setSegment(title: Title, episode: Episode?, segment: SkipSegment) {
-        val current = segments(title, episode).filterNot { it.type == segment.type }
-        setSegments(title, episode, (current + segment).sortedBy { it.startMs })
+    fun setSegment(title: Title, episode: Episode?, segment: SkipSegment, version: AnimeVersion? = null) {
+        val current = segments(title, episode, version).filterNot { it.type == segment.type }
+        setSegments(title, episode, (current + segment).sortedBy { it.startMs }, version)
     }
 
-    private fun markedKey(titleKey: String, episodeKey: String?) = "mark:$titleKey:${episodeKey.orEmpty()}"
+    private fun markedKey(title: Title, episode: Episode?, version: AnimeVersion?) =
+        "mark:${title.key}:${episode?.key.orEmpty()}" + (version?.let { ":${it.wire}" } ?: "")
 }
 
 /**
