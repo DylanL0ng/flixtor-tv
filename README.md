@@ -66,7 +66,7 @@ TV show details list one season at a time through a season picker that opens on 
 
 Intro, recap, credits and post-credits timestamps come from the crowdsourced [IntroDB](https://introdb.app) API. Reads are free and anonymous; nothing is sent but an IMDb id, a season and an episode number. Community data is cached per title and merged with locally marked segments, which always take precedence.
 
-Segments appear as lighter bands on the playback timeline. Entering one offers a skip action, both in the transport row and as a persistent button over the video while controls are hidden. When Autoplay next episode is on, an intro is skipped automatically after a moment; turning autoplay off leaves the manual skip buttons in place. A skipped type never re-offers itself during the same playback. Skipping is best-effort: a lookup failure or a title with no data simply plays normally, and a malformed segment that would seek backwards is discarded.
+Segments appear as lighter bands on the playback timeline. Entering one offers a skip action, both in the transport row and as a persistent button over the video while controls are hidden. Skips are always manual — the user chooses to skip, like Netflix's Skip Intro button; autoplay next episode only controls the next episode countdown. A skipped type never re-offers itself during the same playback. Skipping is best-effort: a lookup failure or a title with no data simply plays normally, and a malformed segment that would seek backwards is discarded.
 
 Community data is keyed by IMDb id. The watch page's id is used when the service exposes one; otherwise set it manually under Player Settings → Skip segments → IMDb ID, which is remembered per title. Without an id only locally marked segments apply.
 

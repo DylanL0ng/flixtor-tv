@@ -174,20 +174,10 @@ import kotlinx.coroutines.delay
     }
     val autoplay = state.profile?.autoplay != false
     val next = state.detail?.next(state.episode)
-    // Autoplay drives both the next episode and automatic skipping.
+    // Autoplay drives only the next episode; skip segments are always manual, like Netflix.
     fun skip(segment: SkipSegment) {
         skipped.add(segment.type.read)
         player.seekTo(segment.endMs)
-    }
-    LaunchedEffect(active?.type?.read, active?.endMs, autoplay) {
-        val segment = active ?: return@LaunchedEffect
-        if (!autoplay || segment.type.read in skipped) return@LaunchedEffect
-        // A manual skip must never be overridden, so only skip after the segment is entered.
-        delay(400)
-        if (active.type.read == segment.type.read && !skipped.contains(segment.type.read)) {
-            skipped.add(segment.type.read)
-            player.seekTo(segment.endMs)
-        }
     }
     LaunchedEffect(ended, next?.key, autoplay) {
         if (!ended || next == null || !autoplay) return@LaunchedEffect
@@ -227,31 +217,49 @@ import kotlinx.coroutines.delay
     Box(Modifier.fillMaxSize().background(Color.Black).focusRequester(rootFocus).onPreviewKeyEvent { event ->
         val key = event.nativeKeyEvent
         if (key.action != KeyEvent.ACTION_DOWN) return@onPreviewKeyEvent false
-        interaction++
-        when (key.keyCode) {
-            KeyEvent.KEYCODE_BACK -> {
-                if (preview != null || settings || controls) closeOverlay() else vm.back()
-                true
+        // When settings or episodes drawer is open, trap focus — don't let D-pad control video
+        if (settings || episodesOpen) {
+            when (key.keyCode) {
+                KeyEvent.KEYCODE_BACK -> { closeOverlay(); true }
+                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER,
+                KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN,
+                KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> true // consume but let drawer handle navigation
+                else -> false
             }
-            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> { if (player.playWhenReady) player.pause() else player.play(); true }
-            KeyEvent.KEYCODE_MEDIA_PLAY -> { player.play(); true }
-            KeyEvent.KEYCODE_MEDIA_PAUSE -> { player.pause(); true }
-            KeyEvent.KEYCODE_MEDIA_REWIND -> { player.seekBack(); true }
-            KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> { player.seekForward(); true }
-            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN,
-            KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> { if (!controls) { controls = true; true } else false }
-            else -> false
+        } else {
+            interaction++
+            when (key.keyCode) {
+                KeyEvent.KEYCODE_BACK -> {
+                    if (preview != null || settings || controls) closeOverlay() else vm.back()
+                    true
+                }
+                KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> { if (player.playWhenReady) player.pause() else player.play(); true }
+                KeyEvent.KEYCODE_MEDIA_PLAY -> { player.play(); true }
+                KeyEvent.KEYCODE_MEDIA_PAUSE -> { player.pause(); true }
+                KeyEvent.KEYCODE_MEDIA_REWIND -> { player.seekBack(); true }
+                KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> { player.seekForward(); true }
+                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN,
+                KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> { if (!controls) { controls = true; true } else false }
+                else -> false
+            }
         }
     }.focusable()) {
         AndroidView(factory = { view }, modifier = Modifier.fillMaxSize())
         if (controls && !settings && !ended) {
+            // Full-width gradient overlay at bottom
+            Box(
+                Modifier
+                    .align(Alignment.BottomStart)
+                    .fillMaxWidth()
+                    .padding(safe)
+                    .background(Brush.verticalGradient(0f to Color.Transparent,
+                        0.28f to Color.Black.copy(alpha = 0.40f), 1f to Color.Black.copy(alpha = 0.84f))),
+            )
             BoxWithConstraints(Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(safe)) {
                 val drawerWidth = maxOf(320.dp, minOf(620.dp, maxWidth * .36f))
                 val controlsWidth = if (episodesOpen) (maxWidth - drawerWidth - 16.dp).coerceAtLeast(0.dp) else maxWidth
                 Column(Modifier.width(controlsWidth)
                     .onSizeChanged { controlsHeight = with(density) { it.height.toDp() } }
-                    .background(Brush.verticalGradient(0f to Color.Transparent,
-                        0.28f to Color.Black.copy(alpha = 0.40f), 1f to Color.Black.copy(alpha = 0.84f)))
                     .padding(horizontal = 32.dp, vertical = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(state.detail?.title?.name.orEmpty(), color = TextPrimary, fontSize = 24.sp, lineHeight = 30.sp,
@@ -320,7 +328,7 @@ import kotlinx.coroutines.delay
                     if (it in listOf(Failure.SIGNED_OUT, Failure.EXPIRED, Failure.VIP, Failure.CAPACITY)) Action(stringResource(R.string.sign_in), if (it == Failure.VIP) Modifier.focusRequester(playFocus) else Modifier) { vm.signInForPlayback() }
                 }
             }
-            }
+        }
         }
         if (settings) {
             GlassDrawer(

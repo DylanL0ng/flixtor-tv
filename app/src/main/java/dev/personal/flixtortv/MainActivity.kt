@@ -553,86 +553,83 @@ class MainActivity : ComponentActivity() {
     val season = if (seasons.contains(picked)) picked else startSeason(s.viewing, title) ?: seasons.firstOrNull() ?: 1
     val episodes = remember(detail.episodes, season) { detail.episodes.filter { it.season == season }.sortedBy { it.number } }
     val resume = s.viewing.firstOrNull { it.title.key == title.key && !it.finished }
+    val imageUrl = title.backdrop.ifBlank { title.poster }
+    val painter = rememberAsyncImagePainter(imageUrl.takeIf { it.isNotBlank() }, imageLoader = images)
 
-    // Two-column layout: poster/hero on left, scrollable details on right
-    Row(Modifier.fillMaxSize()) {
-        // ── Left column: hero art + back ──────────────────────────────────────
-        Box(
-            Modifier
-                .fillMaxHeight()
-                .fillMaxWidth(0.38f)
-        ) {
-            // Poster image fills the full left column
-            val imageUrl = title.backdrop.ifBlank { title.poster }
+    // Single scrollable column: hero image as first item, then details
+    val listState = remember(title.key) { LazyListState() }
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        state = listState,
+        contentPadding = PaddingValues(bottom = 40.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        // Hero image — full-width, fixed aspect, scrolls with content
+        item(key = "hero") {
             if (imageUrl.isNotBlank()) {
-                AsyncImage(
-                    imageUrl, null, imageLoader = images,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                )
-                // Right-edge fade so content panel has a clean entry
-                Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(
-                    listOf(Color.Transparent, AppBackground.copy(alpha = .08f), AppBackground.copy(alpha = .72f), AppBackground),
-                    startX = Float.POSITIVE_INFINITY, endX = 0f,
-                )))
-                // Bottom fade
-                Box(Modifier.fillMaxSize().background(Brush.verticalGradient(
-                    listOf(Color.Transparent, Color.Transparent, AppBackground.copy(alpha = .60f), AppBackground),
-                )))
-            }
-            // Back button anchored top-left
-            Box(Modifier.align(Alignment.TopStart).padding(start = 16.dp, top = 16.dp)) {
-                Action(stringResource(R.string.back), modifier = Modifier.focusRequester(focus)) { vm.back() }
-            }
-            // Title + metadata at bottom-left of image
-            Column(
-                Modifier
-                    .align(Alignment.BottomStart)
-                    .padding(start = 20.dp, bottom = 20.dp, end = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                if (title.rating.isNotBlank()) {
-                    Box(
+                Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f)) {
+                    AsyncImage(painter, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                    // Right-edge fade
+                    Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(
+                        listOf(Color.Transparent, AppBackground.copy(alpha = .08f), AppBackground.copy(alpha = .72f), AppBackground),
+                        startX = Float.POSITIVE_INFINITY, endX = 0f,
+                    )))
+                    // Bottom fade
+                    Box(Modifier.fillMaxSize().background(Brush.verticalGradient(
+                        listOf(Color.Transparent, Color.Transparent, AppBackground.copy(alpha = .60f), AppBackground),
+                    )))
+                    // Back button anchored top-left
+                    Box(Modifier.align(Alignment.TopStart).padding(start = 16.dp, top = 16.dp)) {
+                        Action(stringResource(R.string.back), modifier = Modifier.focusRequester(focus)) { vm.back() }
+                    }
+                    // Title + metadata at bottom-left of image
+                    Column(
                         Modifier
-                            .border(1.dp, TextMuted.copy(alpha = .5f), RoundedCornerShape(4.dp))
-                            .padding(horizontal = 8.dp, vertical = 2.dp)
-                    ) { Text(title.rating, color = TextMuted, fontSize = 12.sp, fontWeight = FontWeight.Medium) }
-                }
-                Text(title.name, color = TextPrimary, fontSize = 28.sp, fontWeight = FontWeight.Bold,
-                    lineHeight = 32.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                if (title.year.isNotBlank() || title.genres.isNotBlank()) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        if (title.year.isNotBlank()) Text(title.year, color = TextSecondary, fontSize = 14.sp)
-                        if (title.year.isNotBlank() && title.genres.isNotBlank())
-                            Box(Modifier.size(3.dp).background(TextMuted, RoundedCornerShape(2.dp)))
-                        if (title.genres.isNotBlank()) Text(title.genres, color = TextSecondary, fontSize = 14.sp,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            .align(Alignment.BottomStart)
+                            .padding(start = 20.dp, bottom = 20.dp, end = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        if (title.rating.isNotBlank()) {
+                            Box(
+                                Modifier
+                                    .border(1.dp, TextMuted.copy(alpha = .5f), RoundedCornerShape(4.dp))
+                                    .padding(horizontal = 8.dp, vertical = 2.dp)
+                            ) { Text(title.rating, color = TextMuted, fontSize = 12.sp, fontWeight = FontWeight.Medium) }
+                        }
+                        Text(title.name, color = TextPrimary, fontSize = 28.sp, fontWeight = FontWeight.Bold,
+                            lineHeight = 32.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                        if (title.year.isNotBlank() || title.genres.isNotBlank()) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                if (title.year.isNotBlank()) Text(title.year, color = TextSecondary, fontSize = 14.sp)
+                                if (title.year.isNotBlank() && title.genres.isNotBlank())
+                                    Box(Modifier.size(3.dp).background(TextMuted, RoundedCornerShape(2.dp)))
+                                if (title.genres.isNotBlank()) Text(title.genres, color = TextSecondary, fontSize = 14.sp,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
                     }
                 }
             }
         }
-
-        // ── Right column: actions + episodes ──────────────────────────────────
-        val listState = remember(title.key) { LazyListState() }
-        LazyColumn(
-            Modifier.fillMaxSize(),
-            state = listState,
-            contentPadding = PaddingValues(start = 8.dp, end = 24.dp, top = 24.dp, bottom = 40.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            // Synopsis
-            if (title.synopsis.isNotBlank()) item(key = "synopsis") {
-                Text(title.synopsis, color = TextSecondary, fontSize = 15.sp, lineHeight = 22.sp,
-                    maxLines = 4, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp))
-            }
-            // Loading / failure
-            if (s.loading || s.failure != null) item(key = "status") {
-                if (s.loading) Loading()
-                s.failure?.let { FailureMessage(it, vm::refresh) }
-            }
-            // Action row
-            item(key = "actions") {
+        // Content — synopsis, actions, episodes
+        item(key = "content") {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = 24.dp, end = 24.dp, top = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                // Synopsis
+                if (title.synopsis.isNotBlank()) {
+                    Text(title.synopsis, color = TextSecondary, fontSize = 15.sp, lineHeight = 22.sp,
+                        maxLines = 4, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(bottom = 4.dp))
+                }
+                // Loading / failure
+                if (s.loading || s.failure != null) {
+                    if (s.loading) Loading()
+                    s.failure?.let { FailureMessage(it, vm::refresh) }
+                }
+                // Action row
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(bottom = 8.dp)) {
                     if (!title.isSeries && !s.loading && s.failure == null) {
                         GlassButton(stringResource(R.string.play), variant = GlassButtonVariant.PRIMARY,
@@ -652,20 +649,20 @@ class MainActivity : ComponentActivity() {
                     }
                     GlassButton(stringResource(if (s.favorites.any { it.key == title.key }) R.string.remove_list else R.string.add_list)) { vm.toggle(title) }
                 }
-            }
-            // Season picker — shown only for multi-season series
-            if (seasons.size > 1) item(key = "seasons") {
-                SeasonPicker(seasons, season, Modifier.fillMaxWidth()) { picked = it }
-            }
-            // No episodes placeholder
-            if (title.isSeries && !s.loading && s.failure == null && detail.episodes.isEmpty()) {
-                item { Text(stringResource(R.string.no_episodes), color = TextSecondary, fontSize = 15.sp,
-                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp)) }
-            }
-            // Episode list
-            items(episodes, key = Episode::key) { episode ->
-                val viewing = s.viewing.firstOrNull { it.title.key == title.key && it.episode?.key == episode.key }
-                EpisodeRow(episode, viewing, s.episode?.key == episode.key, enabled = !s.loading) { vm.play(episode) }
+                // Season picker — shown only for multi-season series
+                if (seasons.size > 1) {
+                    SeasonPicker(seasons, season, Modifier.fillMaxWidth()) { picked = it }
+                }
+                // No episodes placeholder
+                if (title.isSeries && !s.loading && s.failure == null && detail.episodes.isEmpty()) {
+                    Text(stringResource(R.string.no_episodes), color = TextSecondary, fontSize = 15.sp,
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp))
+                }
+                // Episode list
+                episodes.forEach { episode ->
+                    val viewing = s.viewing.firstOrNull { it.title.key == title.key && it.episode?.key == episode.key }
+                    EpisodeRow(episode, viewing, s.episode?.key == episode.key, enabled = !s.loading) { vm.play(episode) }
+                }
             }
         }
     }

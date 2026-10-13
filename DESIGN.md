@@ -200,7 +200,7 @@ Episode rows are one shared component across detail and the player drawer: episo
 
 ### Skip Segments
 
-IntroDB supplies intro, recap, credits and post-credits ranges for an episode or film. Marks are drawn as lighter bands on the timeline, so available skips are visible without opening anything. Entering a segment offers a skip in transport and as a persistent button over the video while controls are hidden; automatic skipping follows the profile's autoplay preference, and a type never re-offers itself once used.
+IntroDB supplies intro, recap, credits and post-credits ranges for an episode or film. Marks are drawn as lighter bands on the timeline, so available skips are visible without opening anything. Entering a segment offers a skip in transport and as a persistent button over the video while controls are hidden; skips are always manual, like Netflix, and a type never re-offers itself once used.
 
 **The Contribution Rule.** Every segment type lists its current range in Player Settings → Skip segments. Mark captures the current playback position, Mark end captures the finish, and the mark applies immediately. Community data needs an IMDb id, taken from the watch page when present or entered manually and remembered per title; it is never guessed. Locally marked ranges always override community data. Contributing needs an IntroDB key supplied by the build through `TV_INTRODB_API_KEY`; it is never entered on device and never a per-profile setting. Reading segments needs no authentication. A keyless build reads, marks and skips normally and only disables contributing, and each screen states which mode it is in. Skipping is best-effort throughout: a failed lookup, a missing id or an unusable range degrades to normal playback rather than an error.
 
