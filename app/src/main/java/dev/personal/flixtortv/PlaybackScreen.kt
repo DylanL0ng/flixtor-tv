@@ -50,6 +50,8 @@ import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.MediaSession
+import androidx.media3.session.SessionResult
+import androidx.media3.session.SessionError
 import androidx.media3.ui.PlayerView
 import androidx.media3.ui.SubtitleView
 import androidx.media3.common.text.Cue
@@ -60,13 +62,21 @@ import kotlinx.coroutines.delay
 private enum class PlayerDrawer { SETTINGS, EPISODES }
 private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLAY, SKIP }
 
-@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable internal fun PlaybackScreen(stream: Stream, state: TvState, vm: TvViewModel) {
+    // A retry or another episode may reuse the same stream URL. The session owns player identity.
+    key(vm.watchingSession.token) { PlaybackContent(stream, state, vm) }
+}
+
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+@Composable private fun PlaybackContent(stream: Stream, state: TvState, vm: TvViewModel) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val identity = remember(stream) { state.playbackIdentity }
+    val playbackToken = remember(stream) { vm.watchingSession.token }
+    val lifecycleState by lifecycle.currentStateFlow.collectAsState()
+    val awaitingConfirmation = state.stillWatchingSeconds != null
     var failure by remember(stream) { mutableStateOf<Failure?>(null) }
-    var buffering by remember(stream) { mutableStateOf(true) }
+    var buffering by remember(stream) { mutableStateOf(!vm.watchingSession.finished) }
     var controls by remember(stream) { mutableStateOf(true) }
     var drawer by remember(stream) { mutableStateOf<PlayerDrawer?>(null) }
     var settingsPage by remember(stream) { mutableStateOf(PlayerSettingsPage.ROOT) }
@@ -75,7 +85,7 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
     val settingsList = androidx.compose.foundation.lazy.rememberLazyListState()
     val settings = drawer == PlayerDrawer.SETTINGS
     val episodesOpen = drawer == PlayerDrawer.EPISODES
-    var ended by remember(stream) { mutableStateOf(false) }
+    var ended by remember(stream) { mutableStateOf(vm.watchingSession.finished) }
     var countdown by remember(stream) { mutableIntStateOf(0) }
     var marking by remember(stream) { mutableStateOf<SegmentType?>(null) }
     var markStart by remember(stream) { mutableLongStateOf(0) }
@@ -108,8 +118,8 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
     val layoutDirection = LocalLayoutDirection.current
     val density = LocalDensity.current
     var bottomAreaHeight by remember(stream) { mutableStateOf(0.dp) }
-    val showTransport = controls && !ended
-    val showSkip = skippable != null && failure == null && !settings && !episodesOpen && !ended
+    val showTransport = controls && !ended && !awaitingConfirmation
+    val showSkip = skippable != null && failure == null && !settings && !episodesOpen && !ended && !awaitingConfirmation
     val skipVisible by rememberUpdatedState(showSkip)
     val player = remember(stream) {
         val http = OkHttpDataSource.Factory(vm.client.mediaClient).setUserAgent(FlixtorClient.USER_AGENT)
@@ -123,8 +133,9 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
                     .setSelectionFlags(if (caption.default) C.SELECTION_FLAG_DEFAULT else 0).build() }
                 val item = MediaItem.Builder().setUri(stream.uri).setMimeType(MimeTypes.APPLICATION_M3U8)
                     .setSubtitleConfigurations(subtitles).setMediaMetadata(MediaMetadata.Builder().setTitle(state.detail?.title?.name).build()).build()
-                setMediaItem(item, state.resumePosition); prepare()
-                playWhenReady = lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+                setMediaItem(item, state.resumePosition)
+                if (!vm.watchingSession.finished) prepare()
+                playWhenReady = lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) && !vm.watchingSession.finished
             }
     }
     LaunchedEffect(player, state.profile?.quality) {
@@ -134,6 +145,10 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
     }
     DisposableEffect(player) {
         playRequested = player.playWhenReady
+        fun watch(foreground: Boolean = lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+            vm.watchPlayback(playbackToken, player.isPlaying, foreground)
+        }
+        watch()
         val listener = object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
                 val http = generateSequence(error.cause) { it.cause }.filterIsInstance<HttpDataSource.InvalidResponseCodeException>().firstOrNull()
@@ -151,27 +166,58 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
                 buffering = value == Player.STATE_BUFFERING
                 if (value == Player.STATE_ENDED) {
                     identity?.let { vm.saveProgress(it, player.duration.coerceAtLeast(0), player.duration.coerceAtLeast(0)) }
+                    watch()
+                    vm.playbackEnded(playbackToken)
+                    if (vm.watchingSession.pending) player.pause()
                     drawer = null; controls = true; ended = true
                 }
             }
-            override fun onIsPlayingChanged(value: Boolean) { playing = value }
+            override fun onIsPlayingChanged(value: Boolean) { playing = value; watch() }
             override fun onPlayWhenReadyChanged(value: Boolean, reason: Int) { playRequested = value }
             override fun onTracksChanged(value: Tracks) { tracks = value }
             override fun onCues(value: CueGroup) { cues = value.cues }
         }
         player.addListener(listener)
-        val session = MediaSession.Builder(context, player).build()
+        val session = MediaSession.Builder(context, player).setCallback(object : MediaSession.Callback {
+            override fun onMediaButtonEvent(session: MediaSession, controllerInfo: MediaSession.ControllerInfo,
+                intent: android.content.Intent): Boolean {
+                val key = androidx.core.content.IntentCompat.getParcelableExtra(intent,
+                    android.content.Intent.EXTRA_KEY_EVENT, KeyEvent::class.java)
+                if (key?.action == KeyEvent.ACTION_DOWN) vm.recordPlaybackInteraction()
+                return vm.watchingSession.pending
+            }
+            @Suppress("OVERRIDE_DEPRECATION") // Media3 1.4.1 command gate keeps pending confirmation authoritative.
+            override fun onPlayerCommandRequest(session: MediaSession, controller: MediaSession.ControllerInfo,
+                playerCommand: Int): Int {
+                val transport = playerCommand in setOf(Player.COMMAND_PLAY_PAUSE, Player.COMMAND_STOP, Player.COMMAND_PREPARE,
+                    Player.COMMAND_SET_MEDIA_ITEM, Player.COMMAND_CHANGE_MEDIA_ITEMS,
+                    Player.COMMAND_SET_REPEAT_MODE, Player.COMMAND_SET_SHUFFLE_MODE,
+                    Player.COMMAND_SEEK_TO_DEFAULT_POSITION, Player.COMMAND_SEEK_TO_MEDIA_ITEM,
+                    Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM, Player.COMMAND_SEEK_BACK, Player.COMMAND_SEEK_FORWARD,
+                    Player.COMMAND_SEEK_TO_NEXT, Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM,
+                    Player.COMMAND_SEEK_TO_PREVIOUS, Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM,
+                    Player.COMMAND_SET_SPEED_AND_PITCH, Player.COMMAND_SET_TRACK_SELECTION_PARAMETERS)
+                if (transport) {
+                    vm.recordPlaybackInteraction()
+                    if (vm.watchingSession.pending) return SessionError.ERROR_INVALID_STATE
+                }
+                return SessionResult.RESULT_SUCCESS
+            }
+        }).build()
         val window = (context as? Activity)?.window
         window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_PAUSE || event == Lifecycle.Event.ON_STOP) watch(false)
             if (event == Lifecycle.Event.ON_STOP) {
-                identity?.let { vm.saveProgress(it, player.currentPosition, player.duration) }; player.pause()
+                if (!ended) identity?.let { vm.saveProgress(it, player.currentPosition, player.duration) }
+                player.pause()
             }
-            if (event == Lifecycle.Event.ON_RESUME) controls = true
+            if (event == Lifecycle.Event.ON_RESUME) { controls = true; watch(true) }
         }
         lifecycle.addObserver(observer)
         onDispose {
-            identity?.let { vm.saveProgress(it, player.currentPosition, player.duration) }
+            vm.watchPlayback(playbackToken, false, false)
+            if (!ended) identity?.let { vm.saveProgress(it, player.currentPosition, player.duration) }
             lifecycle.removeObserver(observer); player.removeListener(listener)
             session.release(); player.release(); window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
@@ -180,6 +226,7 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
         var tick = 0
         while (true) {
             delay(500); position = player.currentPosition.coerceAtLeast(0); duration = player.duration.coerceAtLeast(0)
+            vm.watchPlayback(playbackToken, player.isPlaying, lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
             if (++tick % 10 == 0 && player.isPlaying) identity?.let { vm.saveProgress(it, position, duration) }
         }
     }
@@ -195,11 +242,11 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
         skipped.add(segment.type.read)
         player.seekTo(segment.endMs)
     }
-    LaunchedEffect(ended, next?.key, autoplay) {
-        if (!ended || next == null || !autoplay) return@LaunchedEffect
+    LaunchedEffect(ended, next?.key, autoplay, awaitingConfirmation, lifecycleState) {
+        if (!ended || next == null || !autoplay || awaitingConfirmation || lifecycleState != Lifecycle.State.RESUMED) return@LaunchedEffect
         countdown = NEXT_EPISODE_SECONDS
         while (countdown > 0) { delay(1000); countdown-- }
-        vm.play(next)
+        vm.autoplayNext(playbackToken, next)
     }
     var returnToDrawer by remember(stream) { mutableStateOf<PlayerDrawer?>(null) }
     fun openDrawer(value: PlayerDrawer) { preview = null; controls = true; settingsPage = PlayerSettingsPage.ROOT; settingsOrigin = PlayerSettingsPage.QUALITY; drawer = value }
@@ -236,9 +283,11 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
         subtitleView?.visibility = android.view.View.GONE
     } }
     DisposableEffect(view) { onDispose { view.player = null } }
-    BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black).focusRequester(rootFocus).onPreviewKeyEvent { event ->
+    CompositionLocalProvider(LocalPlaybackInteraction provides vm::recordPlaybackInteraction) {
+    BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black).trackPlaybackInteraction().focusRequester(rootFocus).onPreviewKeyEvent { event ->
         val key = event.nativeKeyEvent
         if (key.action != KeyEvent.ACTION_DOWN) return@onPreviewKeyEvent false
+        if (vm.watchingSession.pending) return@onPreviewKeyEvent true
         // Drawer controls own navigation; the focus group prevents escape to transport.
         if (drawer != null) {
             when (key.keyCode) {
@@ -274,7 +323,7 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
         val safeWidth = maxWidth - safe.calculateLeftPadding(layoutDirection) - safe.calculateRightPadding(layoutDirection)
         val drawerWidth = maxOf(320.dp, minOf(620.dp, safeWidth * .36f)).coerceAtMost(safeWidth)
         AndroidView(factory = { view }, modifier = Modifier.fillMaxSize())
-        val showNext = ended && next != null && !settings && !episodesOpen
+        val showNext = ended && next != null && !settings && !episodesOpen && !awaitingConfirmation
         val showBottomArea = showTransport || showSkip || showNext
         if (showBottomArea) {
             BoxWithConstraints(Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(safe)) {
@@ -565,6 +614,8 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
                 update = { subtitles -> subtitles.setCues(cues) })
         }
         if (buffering && failure == null) GlassSurface(Modifier.align(Alignment.Center)) { Loading() }
+        state.stillWatchingSeconds?.let { WatchingPrompt(it, vm::continueWatching) { vm.back() } }
+    }
     }
 }
 

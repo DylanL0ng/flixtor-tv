@@ -1,6 +1,7 @@
 package dev.personal.flixtortv
 
 import android.app.Application
+import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
@@ -34,6 +35,7 @@ data class TvState(
     val appending: Boolean = false, val appendFailure: Failure? = null, val catalogKey: String = "",
     val screenFit: ScreenFit = ScreenFit(),
     val segments: Segments? = null, val segmentsLoading: Boolean = false,
+    val stillWatchingSeconds: Int? = null,
 )
 class TvViewModel @JvmOverloads constructor(app: Application,
     val client: FlixtorClient = FlixtorClient(SessionStore(app)),
@@ -53,6 +55,43 @@ class TvViewModel @JvmOverloads constructor(app: Application,
     private var pairing: Job? = null
     private var origin = Screen.HOME
     private var pendingPlayback: Pair<Detail, Episode?>? = null
+    internal var watchingSession = WatchingSession(SystemClock::elapsedRealtime)
+    internal fun recordPlaybackInteraction() {
+        if (mutable.value.screen != Screen.PLAYER) return
+        watchingSession.interact()
+        publishWatchingPrompt()
+    }
+    internal fun watchPlayback(token: Long, playing: Boolean, foreground: Boolean) {
+        if (token != watchingSession.token || mutable.value.screen != Screen.PLAYER) return
+        watchingSession.playback(token, playing, foreground)
+        publishWatchingPrompt()
+    }
+    private fun publishWatchingPrompt() {
+        val seconds = watchingSession.responseSeconds
+        if (seconds == 0) { back(); return }
+        if (seconds != mutable.value.stillWatchingSeconds) update { it.copy(stillWatchingSeconds = seconds) }
+    }
+    internal fun playbackEnded(token: Long) {
+        val state = mutable.value
+        if (state.screen != Screen.PLAYER) return
+        watchingSession.complete(token, state.episode != null)
+        if (state.profile?.autoplay != false && state.detail?.next(state.episode) != null)
+            watchingSession.requireConfirmation(token)
+        publishWatchingPrompt()
+    }
+    internal fun autoplayNext(token: Long, episode: Episode) {
+        val state = mutable.value
+        if (token != watchingSession.token || !watchingSession.finished || state.screen != Screen.PLAYER ||
+            state.profile?.autoplay == false || state.failure != null || state.detail?.next(state.episode)?.key != episode.key) return
+        if (watchingSession.requireConfirmation(token)) { publishWatchingPrompt(); return }
+        startPlayback(episode, resume = true, automatic = true)
+    }
+    internal fun continueWatching() {
+        if (!watchingSession.pending || mutable.value.screen != Screen.PLAYER) return
+        val next = nextEpisode() ?: run { back(); return }
+        watchingSession.reset()
+        play(next)
+    }
     init { viewModelScope.launch { while (true) { updates.check(); delay(6L * 60 * 60 * 1000) } } }
     private fun update(transform: (TvState) -> TvState) { mutable.value = transform(mutable.value) }
     private fun load(block: suspend CoroutineScope.() -> Unit) {
@@ -85,6 +124,7 @@ class TvViewModel @JvmOverloads constructor(app: Application,
     override fun onCleared() { catalogJob?.cancel(); segmentsJob?.cancel(); pages.close(); updates.close(); client.close(); super.onCleared() }
     private fun enter(id: String) {
         val profile = profiles.all().firstOrNull { it.id == id } ?: return
+        watchingSession.reset()
         work?.cancel(); catalogJob?.cancel(); stopPairing(); pendingPlayback = null
         library = LibraryStore(getApplication(), id)
         update { TvState(screen = Screen.HOME, profiles = profiles.all(), profile = profile,
@@ -208,6 +248,7 @@ class TvViewModel @JvmOverloads constructor(app: Application,
     fun deleteProfile(id: String) {
         val list = profiles.delete(id)
         if (mutable.value.profile?.id == id) {
+            watchingSession.reset()
             work?.cancel(); catalogJob?.cancel(); stopPairing(); pendingPlayback = null
             library = LibraryStore(getApplication(), list.first().id)
             update { TvState(screen = Screen.PROFILES, profiles = list, account = it.account, accountChecked = it.accountChecked, screenFit = it.screenFit) }
@@ -231,12 +272,13 @@ class TvViewModel @JvmOverloads constructor(app: Application,
     fun openAccountSettings() { navigateTo(Screen.ACCOUNT, SettingsEntry.ACCOUNT) }
     fun navigate(screen: Screen) { navigateTo(screen, SettingsEntry.ROOT) }
     private fun navigateTo(screen: Screen, settingsEntry: SettingsEntry) {
+        watchingSession.reset()
         if (screen != Screen.ACCOUNT) pendingPlayback = null
         work?.cancel(); catalogJob?.cancel(); stopPairing()
         update { it.copy(screen = screen, settingsEntry = settingsEntry, failure = null, titles = emptyList(), page = 1, hasMore = true,
             settingsNavigationId = it.settingsNavigationId + if (screen == Screen.ACCOUNT) 1 else 0,
             detail = null, stream = null, loading = false, appending = false, appendFailure = null, focusedKey = null,
-            segments = null, segmentsLoading = false) }
+            segments = null, segmentsLoading = false, stillWatchingSeconds = null) }
         refresh()
     }
     fun refresh() {
@@ -321,21 +363,23 @@ class TvViewModel @JvmOverloads constructor(app: Application,
     }
     fun open(title: Title) = openFrom(title, title.key)
     fun openFrom(title: Title, location: String) {
+        watchingSession.reset()
         pendingPlayback = null
         val previous = mutable.value
         if (previous.screen != Screen.DETAIL) origin = previous.screen
         catalogJob?.cancel()
         stopPairing()
         update { it.copy(screen = Screen.DETAIL, appending = false, detail = Detail(title, emptyList()),
-            focusedKey = if (previous.screen == Screen.DETAIL) previous.focusedKey else location, stream = null) }
+            focusedKey = if (previous.screen == Screen.DETAIL) previous.focusedKey else location, stream = null, stillWatchingSeconds = null) }
         load { val detail = client.detail(title); ensureActive(); update { it.copy(detail = detail) } }
     }
     fun back(): Boolean {
         return when (mutable.value.screen) {
             Screen.PLAYER -> {
                 work?.cancel(); segmentsJob?.cancel()
+                watchingSession.reset()
                 update { it.copy(screen = Screen.DETAIL, stream = null, failure = null, loading = false,
-                    viewing = library.viewing(), segmentsLoading = false) }; true
+                    viewing = library.viewing(), segmentsLoading = false, stillWatchingSeconds = null) }; true
             }
             Screen.DETAIL -> {
                 work?.cancel()
@@ -356,10 +400,15 @@ class TvViewModel @JvmOverloads constructor(app: Application,
         }
     }
     fun play(episode: Episode?, resume: Boolean = true) {
+        if (watchingSession.pending) return
+        startPlayback(episode, resume, automatic = false)
+    }
+    private fun startPlayback(episode: Episode?, resume: Boolean, automatic: Boolean) {
         val title = mutable.value.detail?.title ?: return
+        watchingSession.start(automatic)
         val previous = library.viewing().firstOrNull { it.title.key == title.key && it.episode?.key == episode?.key }
         val position = if (resume && previous != null && (previous.duration <= 0 || previous.position < previous.duration - 30000)) previous.position else 0
-        update { it.copy(screen = Screen.PLAYER, episode = episode, stream = null, resumePosition = position,
+        update { it.copy(screen = Screen.PLAYER, episode = episode, stream = null, resumePosition = position, stillWatchingSeconds = null,
             playbackIdentity = it.profile?.let { profile -> PlaybackIdentity(profile.id, title, episode) }) }
         loadSegments()
         load { val stream = client.playback(title, episode); ensureActive(); update { it.copy(stream = stream) } }
@@ -369,12 +418,13 @@ class TvViewModel @JvmOverloads constructor(app: Application,
             openFrom(title, "hero")
             return
         }
+        watchingSession.start()
         pendingPlayback = null
         val previous = mutable.value
         if (previous.screen != Screen.DETAIL) origin = previous.screen
         catalogJob?.cancel(); stopPairing()
         update { it.copy(screen = Screen.DETAIL, detail = Detail(title, emptyList()), focusedKey = "hero",
-            stream = null, episode = null, resumePosition = 0, failure = null) }
+            stream = null, episode = null, resumePosition = 0, failure = null, stillWatchingSeconds = null) }
         load {
             val detail = client.detail(title)
             ensureActive()

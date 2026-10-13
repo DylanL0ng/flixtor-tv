@@ -56,7 +56,7 @@ internal fun <T> ChoiceDialog(
     val height = LocalConfiguration.current.screenHeightDp.dp
     val back = remember { FocusRequester() }
     Dialog(onDismissRequest = dismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        GlassSurface(Modifier.padding(LocalSafePadding.current).widthIn(max = 520.dp).fillMaxWidth()
+        GlassSurface(Modifier.trackPlaybackInteraction().padding(LocalSafePadding.current).widthIn(max = 520.dp).fillMaxWidth()
             .heightIn(max = height * .8f)) {
             Text(title, color = TextPrimary, fontSize = 24.sp)
             MenuRow(stringResource(R.string.back), chevron = false, modifier = Modifier.focusRequester(back), onClick = dismiss)

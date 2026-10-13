@@ -1,4 +1,8 @@
 <resources>
+    <string name="still_watching_title">Are you still watching?</string>
+    <string name="still_watching_help">Continue watching to start the next episode.</string>
+    <string name="stop_watching">Stop watching</string>
+    <string name="still_watching_timeout">Returning to title page in %1$ds.</string>
     <string name="option_on">On</string>
     <string name="option_off">Off</string>
     <string name="sort_options">Sort</string>
