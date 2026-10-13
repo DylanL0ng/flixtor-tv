@@ -400,6 +400,10 @@ private fun Modifier.pinKeys(digit: (Int) -> Unit, delete: () -> Unit): Modifier
 @Composable internal fun UpdateSettings(vm: TvViewModel) {
     val state by vm.updates.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    UpdateSettings(state, { vm.checkUpdates() }, { (context as? MainActivity)?.installUpdate() })
+}
+
+@Composable internal fun UpdateSettings(state: UpdateState, check: () -> Unit, install: () -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         val message = when (state.phase) {
             UpdatePhase.IDLE -> R.string.update_not_checked
@@ -413,11 +417,15 @@ private fun Modifier.pinKeys(digit: (Int) -> Unit, delete: () -> Unit): Modifier
             UpdatePhase.SIGNER_MISMATCH -> R.string.update_signer_mismatch
         }
         Text(stringResource(message), color = TextSecondary, fontSize = 16.sp, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+        if (state.phase == UpdatePhase.INSTALLING) Text(stringResource(R.string.update_install_retry_help), color = TextSecondary, fontSize = 15.sp)
         if (state.installationFailed) Text(stringResource(R.string.update_install_failed), color = TextSecondary, fontSize = 15.sp)
         if (state.phase == UpdatePhase.DOWNLOADING) Text(stringResource(R.string.download_progress, state.progress), color = TextSecondary)
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            SettingsAction(stringResource(R.string.check_updates), enabled = state.phase !in listOf(UpdatePhase.CHECKING, UpdatePhase.DOWNLOADING, UpdatePhase.INSTALLING)) { vm.checkUpdates() }
-            if (state.phase == UpdatePhase.READY) SettingsAction(stringResource(R.string.install_update), variant = GlassButtonVariant.PRIMARY) { (context as? MainActivity)?.installUpdate() }
+            // Keep the remote's focus target stable while a background operation runs.
+            SettingsAction(stringResource(R.string.check_updates)) {
+                if (state.phase !in listOf(UpdatePhase.CHECKING, UpdatePhase.DOWNLOADING)) check()
+            }
+            if (state.phase == UpdatePhase.READY) SettingsAction(stringResource(R.string.install_update), variant = GlassButtonVariant.PRIMARY, onClick = install)
         }
         Text(stringResource(R.string.about_version, BuildConfig.VERSION_NAME, BuildConfig.COMMIT_SHA), color = TextMuted, fontSize = 14.sp)
     }

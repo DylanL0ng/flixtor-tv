@@ -140,6 +140,7 @@
     <string name="update_later">Later</string>
     <string name="update_unavailable">Update or fix status is unavailable. Check your connection and try again.</string>
     <string name="update_installing">Waiting for Android to install the update…</string>
+    <string name="update_install_retry_help">If the Android installer closed, choose Check for updates to try again.</string>
     <string name="check_updates">Check for updates</string>
     <string name="install_update">Install update</string>
     <string name="download_progress">Downloaded %1$d%%</string>

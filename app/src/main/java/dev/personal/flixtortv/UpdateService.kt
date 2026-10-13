@@ -83,10 +83,11 @@ class UpdateService(private val context: Context) {
             JSONObject(source.readUtf8())
         }
     }
-    suspend fun check(fingerprint: String? = null) = checkLock.withLock {
-        if (mutable.value.phase == UpdatePhase.INSTALLING) return@withLock
-        change { it.copy(phase = UpdatePhase.CHECKING, incidentKnown = false, incidentChecked = false) }
+    suspend fun check(fingerprint: String? = null, retryInstallation: Boolean = false) = checkLock.withLock {
         try {
+            if (mutable.value.phase == UpdatePhase.INSTALLING &&
+                (!retryInstallation || !recoverInstallation())) return@withLock
+            change { it.copy(phase = UpdatePhase.CHECKING, incidentKnown = false, incidentChecked = false) }
             val release = ReleaseInfo.parse(json(root + "release.json"))
             if (release.versionCode > BuildConfig.VERSION_CODE && release.minSdk <= Build.VERSION.SDK_INT) {
                 change { it.copy(phase = UpdatePhase.DOWNLOADING, version = release.versionName, progress = 0) }
@@ -113,6 +114,19 @@ class UpdateService(private val context: Context) {
         } catch (cancel: CancellationException) { change { it.copy(phase = UpdatePhase.IDLE) }; throw cancel }
         catch (_: UpdateSignerException) { change { it.copy(phase = UpdatePhase.SIGNER_MISMATCH) } }
         catch (_: Exception) { change { it.copy(phase = UpdatePhase.FAILED) } }
+    }
+    /** A dismissed/missing Android confirmation must not disable updates indefinitely. */
+    internal suspend fun recoverInstallation(): Boolean = installLock.withLock {
+        if (mutable.value.phase != UpdatePhase.INSTALLING) return@withLock true
+        val installer = context.packageManager.packageInstaller
+        val id = installPrefs.getInt("session", -1)
+        val session = if (id >= 0) installer.getSessionInfo(id) else null
+        // Never interrupt APK staging or an installation making forward progress.
+        if (session?.isActive == true) return@withLock false
+        installPrefs.edit().remove("session").apply()
+        if (session != null) installer.abandonSession(id)
+        change { it.copy(phase = UpdatePhase.READY, installationFailed = true) }
+        true
     }
     private suspend fun download(release: ReleaseInfo) = withContext(Dispatchers.IO) {
         if (apk.isFile && runCatching { validate(apk, release) }.isSuccess) return@withContext
@@ -178,18 +192,21 @@ class UpdateService(private val context: Context) {
             if (Build.VERSION.SDK_INT >= 31) params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_REQUIRED)
             val id = installer.createSession(params)
             sessionId = id
+            installPrefs.edit().putInt("session", id).apply()
             installer.openSession(id).use { session ->
                 apk.inputStream().use { input -> session.openWrite("base.apk", 0, apk.length()).use { output ->
                     input.copyTo(output); session.fsync(output)
                 } }
-                val intent = Intent(context, UpdateReceiver::class.java)
+                val intent = Intent(context, UpdateReceiver::class.java).putExtra(PackageInstaller.EXTRA_SESSION_ID, id)
                 val flags = PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0)
                 session.commit(PendingIntent.getBroadcast(context, id, intent, flags).intentSender)
             }
         } catch (cancel: CancellationException) {
+            installPrefs.edit().remove("session").apply()
             sessionId?.let { context.packageManager.packageInstaller.abandonSession(it) }
             change { it.copy(phase = UpdatePhase.READY) }; throw cancel
         } catch (_: Exception) {
+            installPrefs.edit().remove("session").apply()
             sessionId?.let { context.packageManager.packageInstaller.abandonSession(it) }
             change { it.copy(phase = if (apk.isFile) UpdatePhase.READY else UpdatePhase.FAILED, installationFailed = true) }
         }
@@ -216,13 +233,17 @@ class UpdateService(private val context: Context) {
 class UpdateReceiver : BroadcastReceiver() {
     @Suppress("DEPRECATION")
     override fun onReceive(context: Context, intent: Intent) {
+        val prefs = context.getSharedPreferences("update_install", Context.MODE_PRIVATE)
+        // A callback from an abandoned attempt cannot overwrite a newer check/install.
+        val sessionId = intent.getIntExtra(PackageInstaller.EXTRA_SESSION_ID, -1)
+        if (sessionId != prefs.getInt("session", -1) || sessionId < 0) return
         val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)
         if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
             val confirm = intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
             try { context.startActivity(confirm?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) ?: error("Missing confirmation")) }
-            catch (_: Exception) { context.getSharedPreferences("update_install", Context.MODE_PRIVATE).edit()
-                .putInt("status", PackageInstaller.STATUS_FAILURE).putLong("time", System.currentTimeMillis()).apply() }
-        } else context.getSharedPreferences("update_install", Context.MODE_PRIVATE).edit()
-            .putInt("status", status).putLong("time", System.currentTimeMillis()).apply()
+            catch (_: Exception) { prefs.edit()
+                .remove("session").putInt("status", PackageInstaller.STATUS_FAILURE).putLong("time", System.currentTimeMillis()).apply() }
+        } else prefs.edit()
+            .remove("session").putInt("status", status).putLong("time", System.currentTimeMillis()).apply()
     }
 }

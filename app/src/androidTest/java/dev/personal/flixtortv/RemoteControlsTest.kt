@@ -18,7 +18,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModelStore
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -140,6 +142,88 @@ class RemoteControlsTest {
         key(KeyEvent.KEYCODE_DPAD_CENTER)
         await("Reopen focuses newly selected option") { focused()?.label == target.getString(R.string.season, 2) }
         key(KeyEvent.KEYCODE_BACK)
+    }
+
+    @Test fun updatesKeepRemoteFocusAndRecoverDismissedInstallers() = withActivity { activity ->
+        val state = mutableStateOf(UpdateState(UpdatePhase.INSTALLING))
+        var checks = 0
+        var installs = 0
+        render(activity) {
+            val back = androidx.compose.runtime.remember { androidx.compose.ui.focus.FocusRequester() }
+            androidx.compose.runtime.LaunchedEffect(Unit) { withFrameNanos { }; back.requestFocus() }
+            Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                MenuRow(text(R.string.back), Modifier.focusRequester(back)) { }
+                androidx.compose.foundation.lazy.LazyColumn(Modifier.weight(1f).fillMaxWidth(.88f)) {
+                    item { UpdateSettings(state.value, { checks++ }, { installs++ }) }
+                }
+            }
+        }
+        await("Updates opens on Back") { focused()?.label == text(R.string.back) }
+        key(KeyEvent.KEYCODE_DPAD_DOWN)
+        await("Check stays reachable while installer is waiting") { focused()?.label == text(R.string.check_updates) }
+        key(KeyEvent.KEYCODE_DPAD_CENTER)
+        assertEquals(1, checks)
+        for (phase in UpdatePhase.entries) {
+            instrument.runOnMainSync { state.value = UpdateState(phase, progress = 50) }
+            await("Phase $phase preserves remote focus") { focused()?.label == text(R.string.check_updates) }
+            val before = checks
+            key(KeyEvent.KEYCODE_DPAD_CENTER)
+            assertEquals("Busy checks/downloads must not queue duplicate requests", before +
+                if (phase in listOf(UpdatePhase.CHECKING, UpdatePhase.DOWNLOADING)) 0 else 1, checks)
+        }
+        instrument.runOnMainSync { state.value = UpdateState(UpdatePhase.READY) }
+        key(KeyEvent.KEYCODE_DPAD_RIGHT)
+        await("Install remains reachable") { focused()?.label == text(R.string.install_update) }
+        key(KeyEvent.KEYCODE_DPAD_CENTER)
+        assertEquals(1, installs)
+        key(KeyEvent.KEYCODE_DPAD_UP)
+        await("Up returns to Back") { focused()?.label == text(R.string.back) }
+        key(KeyEvent.KEYCODE_DPAD_DOWN)
+        await("Down returns to an update action") { focused()?.label in listOf(text(R.string.check_updates), text(R.string.install_update)) }
+        capture("remote-updates")
+
+        val prefix = "update_test_${UUID.randomUUID()}_"
+        val context = object : ContextWrapper(target) {
+            override fun getSharedPreferences(name: String, mode: Int) = super.getSharedPreferences(prefix + name, mode)
+        }
+        val service = UpdateService(context)
+        val prefs = context.getSharedPreferences("update_install", Context.MODE_PRIVATE)
+        @Suppress("UNCHECKED_CAST")
+        val flow = UpdateService::class.java.getDeclaredField("mutable").apply { isAccessible = true }
+            .get(service) as MutableStateFlow<UpdateState>
+        val installer = target.packageManager.packageInstaller
+        var sessionId = -1
+        try {
+            flow.value = UpdateState(UpdatePhase.INSTALLING)
+            assertTrue("Missing installer callback can be retried", kotlinx.coroutines.runBlocking { service.recoverInstallation() })
+            assertEquals(UpdatePhase.READY, flow.value.phase)
+            sessionId = installer.createSession(android.content.pm.PackageInstaller.SessionParams(
+                android.content.pm.PackageInstaller.SessionParams.MODE_FULL_INSTALL))
+            prefs.edit().putInt("session", sessionId).apply()
+            flow.value = UpdateState(UpdatePhase.INSTALLING)
+            installer.openSession(sessionId).use {
+                assertFalse("Active staging must never be interrupted", kotlinx.coroutines.runBlocking { service.recoverInstallation() })
+                assertEquals(UpdatePhase.INSTALLING, flow.value.phase)
+            }
+            await("Closed session becomes idle") { installer.getSessionInfo(sessionId)?.isActive == false }
+            assertTrue("Idle dismissed installer can be retried", kotlinx.coroutines.runBlocking { service.recoverInstallation() })
+            await("Abandoned session is removed asynchronously") { installer.getSessionInfo(sessionId) == null }
+            assertEquals(UpdatePhase.READY, flow.value.phase)
+            assertTrue(flow.value.installationFailed)
+            UpdateReceiver().onReceive(context, Intent().putExtra(android.content.pm.PackageInstaller.EXTRA_SESSION_ID, sessionId)
+                .putExtra(android.content.pm.PackageInstaller.EXTRA_STATUS, android.content.pm.PackageInstaller.STATUS_FAILURE))
+            assertFalse("Abandoned callback cannot overwrite retry", prefs.contains("status"))
+            prefs.edit().putInt("session", sessionId).apply()
+            flow.value = UpdateState(UpdatePhase.INSTALLING)
+            UpdateReceiver().onReceive(context, Intent().putExtra(android.content.pm.PackageInstaller.EXTRA_SESSION_ID, sessionId)
+                .putExtra(android.content.pm.PackageInstaller.EXTRA_STATUS, android.content.pm.PackageInstaller.STATUS_FAILURE))
+            await("Current installer failure restores retry") { flow.value.phase == UpdatePhase.READY }
+            assertFalse("Finished attempt is cleared", prefs.contains("session"))
+        } finally {
+            if (sessionId >= 0) runCatching { installer.abandonSession(sessionId) }
+            service.close()
+            target.deleteSharedPreferences(prefix + "update_install")
+        }
     }
 
     @Test fun remoteDigitsMixWithKeypadAndEditorRequiresSave() = withActivity { activity ->

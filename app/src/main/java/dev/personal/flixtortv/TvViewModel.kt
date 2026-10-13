@@ -127,7 +127,7 @@ class TvViewModel @JvmOverloads constructor(app: Application,
         if (failure == Failure.CHANGED) { updates.resetReport(); checkUpdates(true) }
     }
     fun checkUpdates(structural: Boolean = false) { viewModelScope.launch {
-        updates.check(if (structural) fingerprint() else null)
+        updates.check(if (structural) fingerprint() else null, retryInstallation = !structural)
     } }
     fun fingerprint() = (if (isAnime) "hianime." else "") + mutable.value.failureOperation.lowercase() + ".response-v1"
     fun report() { viewModelScope.launch { updates.report(mutable.value.failureOperation, fingerprint()) } }
