@@ -21,6 +21,193 @@ import java.io.File
 /** Opt-in visual fixtures on a separate emulator; public sample media, no household login. */
 @RunWith(AndroidJUnit4::class)
 class VisualQaTest {
+    @Test fun verifySingleBottomRightPlayerActions() {
+        assumeTrue(InstrumentationRegistry.getArguments().getString("visualQA") == "true")
+        val instrument = InstrumentationRegistry.getInstrumentation()
+        val context = instrument.targetContext
+        val suffix = InstrumentationRegistry.getArguments().getString("captureSize", "1080")
+        val activity = instrument.startActivitySync(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
+        instrument.setInTouchMode(false)
+        lateinit var mutable: MutableStateFlow<TvState>
+        lateinit var vm: TvViewModel
+        instrument.runOnMainSync {
+            vm = ViewModelProvider(activity)[TvViewModel::class.java]
+            @Suppress("UNCHECKED_CAST")
+            mutable = TvViewModel::class.java.getDeclaredField("mutable").apply { isAccessible = true }.get(vm) as MutableStateFlow<TvState>
+        }
+        val fixture = File(context.filesDir, "qa-player").apply { mkdirs() }
+        listOf("qa-player.m3u8", "qa-player-0.ts").forEach { name ->
+            instrument.context.assets.open(name).use { input -> File(fixture, name).outputStream().use { output -> input.copyTo(output) } }
+        }
+        val subtitles = "WEBVTT\n\n00:00.000 --> 01:00.000\nCaptions stay above player actions.\n"
+        val caption = Caption("data:text/vtt;base64," + android.util.Base64.encodeToString(subtitles.toByteArray(), android.util.Base64.NO_WRAP), "QA English", "text/vtt", true)
+        val stream = Stream(File(fixture, "qa-player.m3u8").toURI().toString(), listOf(caption))
+        val profile = mutable.value.profiles.first().copy(autoplay = false)
+        val episode = Episode(1, 1, "Player action fixture")
+        val next = Episode(1, 2, "Next episode fixture")
+        val title = Title("qa-player-actions", "/watch/tv/qa-player-actions", "Player actions QA")
+        val base = TvState(profile = profile, profiles = listOf(profile), account = Account(false), accountChecked = true,
+            screen = Screen.PLAYER, stream = stream, detail = Detail(title, listOf(episode, next)), episode = episode)
+        data class Node(val label: String, val bounds: Rect, val focused: Boolean, val clickable: Boolean)
+        fun nodes(): List<Node> {
+            fun read(node: AccessibilityNodeInfo?): List<Node> {
+                if (node == null) return emptyList()
+                node.refresh()
+                val own = Node(node.contentDescription?.toString() ?: node.text?.toString().orEmpty(),
+                    Rect().also(node::getBoundsInScreen), node.isFocused, node.isClickable)
+                val children = (0 until node.childCount).flatMap { read(node.getChild(it)) }
+                @Suppress("DEPRECATION") // Still releases pooled nodes on Android 10–12.
+                node.recycle()
+                return listOf(own) + children
+            }
+            val raw = read(instrument.uiAutomation.rootInActiveWindow)
+            // Compose exposes action/focus and its label on separate accessibility nodes.
+            return raw.map { node ->
+                if (node.label.isBlank() && (node.clickable || node.focused))
+                    node.copy(label = raw.firstOrNull { node.bounds.contains(it.bounds) && it.label.isNotBlank() && it.bounds.width() >= node.bounds.width() / 2 }?.label.orEmpty())
+                else node
+            }
+        }
+        fun label(id: Int) = context.getString(id)
+        fun actions(id: Int) = nodes().filter { it.clickable && it.label == label(id) }
+        fun visible(id: Int) = nodes().any { it.label == label(id) }
+        fun awaitCondition(message: String, condition: () -> Boolean) {
+            val deadline = System.currentTimeMillis() + 8000
+            while (!condition() && System.currentTimeMillis() < deadline) Thread.sleep(100)
+            assertTrue("$message; nodes=${nodes()}", condition())
+        }
+        fun key(code: Int) { instrument.sendKeyDownUpSync(code); Thread.sleep(200) }
+        fun capture(name: String) {
+            val bitmap = instrument.uiAutomation.takeScreenshot()
+            File(context.getExternalFilesDir(null), "$name-$suffix.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            bitmap.recycle()
+        }
+        fun render(state: TvState) {
+            instrument.runOnMainSync { vm.back(); mutable.value = state.copy(screen = Screen.DETAIL, stream = null) }
+            instrument.waitForIdleSync()
+            Thread.sleep(200)
+            instrument.runOnMainSync { mutable.value = state }
+            awaitCondition("Offline player must start") {
+                visible(R.string.play_next) || nodes().any { it.label.endsWith(context.getString(R.string.time_remaining, "")) &&
+                    it.label != context.getString(R.string.time_remaining, clock(0)) }
+            }
+            if (state.resumePosition == 0L) {
+                key(KeyEvent.KEYCODE_MEDIA_PAUSE)
+                key(KeyEvent.KEYCODE_DPAD_DOWN)
+                awaitCondition("Player must pause") { visible(R.string.play) }
+            }
+        }
+        fun segment(type: SegmentType, end: Long = 20000) = Segments("", listOf(SkipSegment(type, 0, end)))
+        fun safeBounds(fit: ScreenFit): Rect {
+            val bitmap = instrument.uiAutomation.takeScreenshot()
+            val density = context.resources.displayMetrics.density
+            val x = if (fit == ScreenFit()) (14 * density).toInt() else bitmap.width * fit.horizontal / 100
+            val y = if (fit == ScreenFit()) (12 * density).toInt() else bitmap.height * fit.vertical / 100
+            val bounds = Rect(x, y, bitmap.width - x, bitmap.height - y)
+            bitmap.recycle()
+            return bounds
+        }
+        try {
+            listOf(ScreenFit(), ScreenFit(10, 10)).forEach { fit ->
+                render(base.copy(screenFit = fit, segments = segment(SegmentType.INTRO)))
+                capture("player-actions-initial-${fit.horizontal}")
+                awaitCondition("Exactly one intro action") { actions(R.string.skip_intro).size == 1 }
+                val skip = actions(R.string.skip_intro).single().bounds
+                val heading = nodes().first { it.label == title.name }.bounds
+                val timeline = nodes().first { it.label == label(R.string.timeline) }.bounds
+                assertTrue("Skip must sit above entire control panel", skip.bottom < heading.top && skip.bottom < timeline.top)
+                assertTrue("Skip must respect screen fit", safeBounds(fit).contains(skip))
+                key(KeyEvent.KEYCODE_DPAD_UP)
+                key(KeyEvent.KEYCODE_DPAD_UP)
+                awaitCondition("Timeline Up must focus skip") { actions(R.string.skip_intro).singleOrNull()?.focused == true }
+                capture("player-skip-focused-${fit.horizontal}")
+                key(KeyEvent.KEYCODE_DPAD_CENTER)
+                awaitCondition("Used skip disappears and restores timeline focus") {
+                    actions(R.string.skip_intro).isEmpty() && nodes().any { it.label == label(R.string.timeline) && it.focused }
+                }
+                key(KeyEvent.KEYCODE_MEDIA_REWIND)
+                assertTrue("Used intro must not reappear", actions(R.string.skip_intro).isEmpty())
+                instrument.runOnMainSync { mutable.value = mutable.value.copy(segments = segment(SegmentType.RECAP)) }
+                awaitCondition("Exactly one recap action") { actions(R.string.skip_recap).size == 1 }
+                key(KeyEvent.KEYCODE_BACK)
+                awaitCondition("Recap stays visible with transport hidden") { !visible(R.string.timeline) && actions(R.string.skip_recap).size == 1 }
+                val hiddenSkip = actions(R.string.skip_recap).single().bounds
+                assertTrue("Hidden-controls action moves down", hiddenSkip.top > skip.top)
+                assertTrue(safeBounds(fit).contains(hiddenSkip))
+                capture("player-skip-hidden-${fit.horizontal}")
+                key(KeyEvent.KEYCODE_DPAD_UP)
+                awaitCondition("Hidden skip must be remote reachable") { actions(R.string.skip_recap).singleOrNull()?.focused == true }
+                key(KeyEvent.KEYCODE_ENTER)
+                awaitCondition("Hidden skip activates") { actions(R.string.skip_recap).isEmpty() }
+                assertEquals(Screen.PLAYER, mutable.value.screen)
+                key(KeyEvent.KEYCODE_DPAD_DOWN)
+                instrument.runOnMainSync { mutable.value = mutable.value.copy(segments = segment(SegmentType.CREDITS, 60000)) }
+                awaitCondition("Exactly one credits action") { actions(R.string.skip_credits).size == 1 }
+                // Transport begins at Play: Right traverses rewind, forward, Episodes, Settings.
+                repeat(4) { key(KeyEvent.KEYCODE_DPAD_RIGHT) }
+                key(KeyEvent.KEYCODE_DPAD_CENTER)
+                awaitCondition("Settings suppresses skip") { visible(R.string.quality) && actions(R.string.skip_credits).isEmpty() }
+                capture("player-skip-settings-${fit.horizontal}")
+                key(KeyEvent.KEYCODE_BACK)
+                awaitCondition("Settings restores initiating focus") { nodes().any { it.label == label(R.string.settings) && it.focused } }
+                key(KeyEvent.KEYCODE_DPAD_LEFT)
+                key(KeyEvent.KEYCODE_DPAD_CENTER)
+                awaitCondition("Episodes suppresses skip") { nodes().any { it.label == next.name } && actions(R.string.skip_credits).isEmpty() }
+                key(KeyEvent.KEYCODE_BACK)
+                awaitCondition("Episodes restores initiating focus") { nodes().any { it.label == label(R.string.episodes) && it.focused } }
+
+                instrument.runOnMainSync { mutable.value = mutable.value.copy(segments = segment(SegmentType.POST_CREDITS, 60000)) }
+                awaitCondition("Exactly one post-credits action") { actions(R.string.skip_post_credits).size == 1 }
+                key(KeyEvent.KEYCODE_DPAD_UP)
+                key(KeyEvent.KEYCODE_DPAD_UP)
+                awaitCondition("Post-credits action reachable") { actions(R.string.skip_post_credits).singleOrNull()?.focused == true }
+                instrument.runOnMainSync { mutable.value = mutable.value.copy(segments = null) }
+                awaitCondition("Removed segment restores timeline focus") {
+                    actions(R.string.skip_post_credits).isEmpty() && nodes().any { it.label == label(R.string.timeline) && it.focused }
+                }
+
+                render(base.copy(screenFit = fit, resumePosition = 59000, segments = segment(SegmentType.CREDITS, 60000)))
+                awaitCondition("Next prompt replaces skip and transport") {
+                    actions(R.string.play_next).size == 1 && actions(R.string.skip_credits).isEmpty() && !visible(R.string.timeline)
+                }
+                val playNext = actions(R.string.play_next).single()
+                assertTrue("Play next focused by default", playNext.focused)
+                assertFalse("Autoplay off must not show countdown", nodes().any { node ->
+                    (0..5).any { node.label == context.getString(R.string.next_episode_in, it) }
+                })
+                assertTrue("Next prompt respects margins", safeBounds(fit).contains(playNext.bounds))
+                assertTrue("Next prompt aligned right", playNext.bounds.left > safeBounds(fit).centerX() - 200 * context.resources.displayMetrics.density)
+                capture("player-next-${fit.horizontal}")
+                key(KeyEvent.KEYCODE_DPAD_RIGHT)
+                key(KeyEvent.KEYCODE_DPAD_CENTER)
+                awaitCondition("Cancel dismisses prompt") { actions(R.string.play_next).isEmpty() && visible(R.string.timeline) }
+                assertEquals(episode, mutable.value.episode)
+            }
+            render(base.copy(resumePosition = 59000))
+            awaitCondition("Next prompt appears") { actions(R.string.play_next).size == 1 }
+            key(KeyEvent.KEYCODE_BACK)
+            awaitCondition("Back dismisses prompt without leaving player") { actions(R.string.play_next).isEmpty() && visible(R.string.timeline) }
+            assertEquals(Screen.PLAYER, mutable.value.screen)
+            render(base.copy(resumePosition = 59000))
+            awaitCondition("Play next available") { actions(R.string.play_next).size == 1 }
+            key(KeyEvent.KEYCODE_DPAD_CENTER)
+            awaitCondition("Play next starts immediately") { mutable.value.episode == next }
+            render(base.copy(profile = profile.copy(autoplay = true), resumePosition = 59000))
+            awaitCondition("Autoplay countdown appears") { nodes().any { it.label == context.getString(R.string.next_episode_in, 5) } }
+            capture("player-next-autoplay")
+            awaitCondition("Autoplay starts following episode") { mutable.value.episode == next }
+            instrument.runOnMainSync {
+                vm.back()
+                mutable.value = base.copy(stream = Stream(File(fixture, "missing.m3u8").toURI().toString(), emptyList()),
+                    segments = segment(SegmentType.INTRO))
+            }
+            awaitCondition("Media failure suppresses skip") { mutable.value.failure != null && actions(R.string.skip_intro).isEmpty() }
+            capture("player-skip-error")
+        } finally {
+            instrument.runOnMainSync { activity.finish() }
+        }
+    }
+
     @Test fun captureUpdateDecisionAtMaximumMargins() {
         assumeTrue(InstrumentationRegistry.getArguments().getString("visualQA") == "true")
         val instrument = InstrumentationRegistry.getInstrumentation()

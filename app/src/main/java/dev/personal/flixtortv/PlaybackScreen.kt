@@ -15,6 +15,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
@@ -70,7 +71,7 @@ import kotlinx.coroutines.delay
     var marking by remember(stream) { mutableStateOf<SegmentType?>(null) }
     var markStart by remember(stream) { mutableLongStateOf(0) }
     // Segment types already used this playback, so a skip never re-offers itself.
-    val skipped = remember(stream) { mutableSetOf<String>() }
+    val skipped = remember(stream) { mutableStateListOf<String>() }
     var playing by remember(stream) { mutableStateOf(false) }
     var playRequested by remember(stream) { mutableStateOf(false) }
     var tracks by remember(stream) { mutableStateOf(Tracks.EMPTY) }
@@ -85,6 +86,9 @@ import kotlinx.coroutines.delay
     val episodesFocus = remember(stream) { FocusRequester() }
     val episodesButtonFocus = remember(stream) { FocusRequester() }
     val nextFocus = remember(stream) { FocusRequester() }
+    val skipFocus = remember(stream) { FocusRequester() }
+    val timelineFocus = remember(stream) { FocusRequester() }
+    var skipFocused by remember(stream) { mutableStateOf(false) }
     val episodes = state.detail?.takeIf { it.title.isSeries }?.ordered ?: emptyList()
     val segments = state.segments?.items.orEmpty()
     val active = segments.firstOrNull { it.contains(position) }
@@ -94,7 +98,10 @@ import kotlinx.coroutines.delay
     var timelineFocused by remember(stream) { mutableStateOf(false) }
     val safe = LocalSafePadding.current
     val density = LocalDensity.current
-    var controlsHeight by remember(stream) { mutableStateOf(150.dp) }
+    var bottomAreaHeight by remember(stream) { mutableStateOf(0.dp) }
+    val showTransport = controls && !settings && !ended
+    val showSkip = skippable != null && failure == null && !settings && !episodesOpen && !ended
+    val skipVisible by rememberUpdatedState(showSkip)
     val player = remember(stream) {
         val http = OkHttpDataSource.Factory(vm.client.mediaClient).setUserAgent(FlixtorClient.USER_AGENT)
             .setDefaultRequestProperties(mapOf("Referer" to SiteParser.BASE + "/"))
@@ -135,7 +142,7 @@ import kotlinx.coroutines.delay
                 buffering = value == Player.STATE_BUFFERING
                 if (value == Player.STATE_ENDED) {
                     identity?.let { vm.saveProgress(it, player.duration.coerceAtLeast(0), player.duration.coerceAtLeast(0)) }
-                    ended = true
+                    settings = false; episodesOpen = false; controls = true; ended = true
                 }
             }
             override fun onIsPlayingChanged(value: Boolean) { playing = value }
@@ -167,8 +174,8 @@ import kotlinx.coroutines.delay
             if (++tick % 10 == 0 && player.isPlaying) identity?.let { vm.saveProgress(it, position, duration) }
         }
     }
-    LaunchedEffect(controls, settings, episodesOpen, interaction, failure, playing, preview, ended) {
-        if (controls && !settings && !episodesOpen && !ended && preview == null && failure == null && playing) {
+    LaunchedEffect(controls, settings, episodesOpen, interaction, failure, playing, preview, ended, skipFocused) {
+        if (controls && !settings && !episodesOpen && !ended && preview == null && failure == null && playing && !skipFocused) {
             delay(6000); controls = false
         }
     }
@@ -198,13 +205,20 @@ import kotlinx.coroutines.delay
     }
     LaunchedEffect(controls, settings, episodesOpen, ended, failure) {
         when {
-            ended -> nextFocus.requestFocus()
             settings -> drawerFocus.requestFocus()
             episodesOpen -> episodesFocus.requestFocus()
-            controls && returnToSettings -> { settingsFocus.requestFocus(); returnToSettings = false }
-            controls && returnToEpisodes -> { episodesButtonFocus.requestFocus(); returnToEpisodes = false }
-            controls -> playFocus.requestFocus()
-            else -> rootFocus.requestFocus()
+            ended && next == null -> rootFocus.requestFocus()
+            !controls && !ended -> rootFocus.requestFocus()
+        }
+    }
+    LaunchedEffect(showSkip) {
+        if (!showSkip && skipFocused) {
+            skipFocused = false
+            if (!settings && !episodesOpen && !ended && failure == null) {
+                if (showTransport) {
+                    if (player.isCurrentMediaItemSeekable) timelineFocus.requestFocus() else playFocus.requestFocus()
+                } else rootFocus.requestFocus()
+            }
         }
     }
     BackHandler(ended || preview != null || settings || episodesOpen || controls) { closeOverlay() }
@@ -230,7 +244,7 @@ import kotlinx.coroutines.delay
             interaction++
             when (key.keyCode) {
                 KeyEvent.KEYCODE_BACK -> {
-                    if (preview != null || settings || controls) closeOverlay() else vm.back()
+                    if (ended || preview != null || settings || controls) closeOverlay() else vm.back()
                     true
                 }
                 KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> { if (player.playWhenReady) player.pause() else player.play(); true }
@@ -238,97 +252,139 @@ import kotlinx.coroutines.delay
                 KeyEvent.KEYCODE_MEDIA_PAUSE -> { player.pause(); true }
                 KeyEvent.KEYCODE_MEDIA_REWIND -> { player.seekBack(); true }
                 KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> { player.seekForward(); true }
-                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN,
-                KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> { if (!controls) { controls = true; true } else false }
+                KeyEvent.KEYCODE_DPAD_UP -> {
+                    if (!controls && showSkip) { skipFocus.requestFocus(); true }
+                    else if (!controls && !ended) { controls = true; true } else false
+                }
+                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+                    if (!controls && !skipFocused && !ended) { controls = true; true } else false
+                }
+                KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                    if (!controls && !ended) { controls = true; true } else false
+                }
                 else -> false
             }
         }
     }.focusable()) {
         AndroidView(factory = { view }, modifier = Modifier.fillMaxSize())
-        if (controls && !settings && !ended) {
-            // Full-width gradient overlay at bottom
-            Box(
-                Modifier
-                    .align(Alignment.BottomStart)
-                    .fillMaxWidth()
-                    .padding(safe)
-                    .background(Brush.verticalGradient(0f to Color.Transparent,
-                        0.28f to Color.Black.copy(alpha = 0.40f), 1f to Color.Black.copy(alpha = 0.84f))),
-            )
-            BoxWithConstraints(Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(safe)) {
+        val showNext = ended && next != null && !settings && !episodesOpen
+        val showBottomArea = showTransport || showSkip || showNext
+        if (showBottomArea) {
+            BoxWithConstraints(Modifier.align(Alignment.BottomEnd).fillMaxWidth().padding(safe)) {
+                // These targets attach during this subcomposition, before its effects run.
+                LaunchedEffect(controls, episodesOpen, ended, failure) {
+                    when {
+                        showNext -> nextFocus.requestFocus()
+                        episodesOpen -> Unit
+                        controls && returnToSettings -> { settingsFocus.requestFocus(); returnToSettings = false }
+                        controls && returnToEpisodes -> { episodesButtonFocus.requestFocus(); returnToEpisodes = false }
+                        showTransport -> playFocus.requestFocus()
+                    }
+                }
                 val drawerWidth = maxOf(320.dp, minOf(620.dp, maxWidth * .36f))
                 val controlsWidth = if (episodesOpen) (maxWidth - drawerWidth - 16.dp).coerceAtLeast(0.dp) else maxWidth
+                // One measured stack keeps actions, transport and captions clear of each other.
                 Column(Modifier.width(controlsWidth)
-                    .onSizeChanged { controlsHeight = with(density) { it.height.toDp() } }
+                    .onSizeChanged { bottomAreaHeight = with(density) { it.height.toDp() } }
+                    .then(if (showTransport) Modifier.background(Brush.verticalGradient(0f to Color.Transparent,
+                        0.28f to Color.Black.copy(alpha = 0.40f), 1f to Color.Black.copy(alpha = 0.84f))) else Modifier)
                     .padding(horizontal = 32.dp, vertical = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(state.detail?.title?.name.orEmpty(), color = TextPrimary, fontSize = 24.sp, lineHeight = 30.sp,
-                    fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                state.episode?.let {
-                    MetadataRow(modifier = Modifier.padding(top = 1.dp), items = listOf(stringResource(R.string.episode, it.number, it.name)))
-                }
-                val shownPosition = preview ?: position
-                val fraction = if (duration > 0) (shownPosition.toFloat() / duration).coerceIn(0f, 1f) else 0f
-                val timelineLabel = stringResource(R.string.timeline)
-                Canvas(Modifier.fillMaxWidth().height(24.dp).onFocusChanged { timelineFocused = it.isFocused; if (!it.isFocused) preview = null }
-                    .onPreviewKeyEvent { event ->
-                        if (event.nativeKeyEvent.action != KeyEvent.ACTION_DOWN || !player.isCurrentMediaItemSeekable || duration <= 0) false
-                        else when (event.nativeKeyEvent.keyCode) {
-                            KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                                val delta = if (event.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_DPAD_LEFT) -10000L else 10000L
-                                preview = ((preview ?: position) + delta).coerceIn(0, duration); true
+                    horizontalAlignment = Alignment.End,
+                    verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    if (showNext && next != null) {
+                        GlassSurface(Modifier.widthIn(max = 520.dp)) {
+                            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                                Text(stringResource(R.string.next_episode), color = TextPrimary, fontSize = 28.sp,
+                                    fontWeight = FontWeight.Bold)
+                                Text(stringResource(R.string.episode, next.number, next.name), color = TextSecondary,
+                                    fontSize = 18.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                if (autoplay) Text(stringResource(R.string.next_episode_in, countdown), color = Accent,
+                                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+                                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    GlassButton(stringResource(R.string.play_next), Modifier.focusRequester(nextFocus),
+                                        variant = GlassButtonVariant.PRIMARY) { vm.play(next) }
+                                    GlassButton(stringResource(R.string.cancel)) { ended = false; countdown = 0 }
+                                    GlassButton(stringResource(R.string.back)) { ended = false; countdown = 0; vm.back() }
+                                }
                             }
-                            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
-                                preview?.let(player::seekTo); preview = null; true
-                            }
-                            else -> false
                         }
-                    }.focusable(player.isCurrentMediaItemSeekable).semantics {
-                        contentDescription = timelineLabel; progressBarRangeInfo = ProgressBarRangeInfo(fraction, 0f..1f)
-                    }) {
-                    val y = size.height / 2
-                    drawLine(Color.Black.copy(alpha = 0.7f), Offset(0f, y), Offset(size.width, y), 6.dp.toPx())
-                    drawLine(Color.White.copy(alpha = 0.38f), Offset(0f, y), Offset(size.width, y), 4.dp.toPx())
-                    drawLine(Accent, Offset(0f, y), Offset(size.width * fraction, y), 4.dp.toPx())
-                    // Segment markers show where a skip is available without leaving the video.
-                    if (duration > 0) state.segments?.markers(duration)?.forEach { (_, bounds) ->
-                        val (from, to) = bounds
-                        drawRect(Color.White.copy(alpha = 0.55f), Offset(size.width * from, y - 4.dp.toPx()),
-                            androidx.compose.ui.geometry.Size(size.width * (to - from), 8.dp.toPx()))
+                    } else if (showSkip && skippable != null) {
+                        GlassButton(segmentLabel(skippable.type), variant = GlassButtonVariant.PRIMARY,
+                            modifier = Modifier.heightIn(min = 56.dp).focusRequester(skipFocus)
+                                .focusProperties { if (showTransport) down = if (player.isCurrentMediaItemSeekable) timelineFocus else playFocus }
+                                .onFocusChanged {
+                                    // Keep focus identity through removal so its replacement can receive focus.
+                                    if (it.isFocused || skipVisible) skipFocused = it.isFocused
+                                }) { skip(skippable) }
                     }
-                    if (timelineFocused) drawCircle(Color.Black.copy(alpha = .65f), 9.dp.toPx(), Offset(size.width * fraction, y))
-                    drawCircle(if (timelineFocused) Accent else Color.White, if (timelineFocused) 6.dp.toPx() else 4.dp.toPx(), Offset(size.width * fraction, y))
-                }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(clock(shownPosition), fontSize = 12.sp, color = TextSecondary)
-                    Text(if (preview != null) stringResource(R.string.seek_preview, clock(shownPosition))
-                        else stringResource(R.string.time_remaining, clock((duration - position).coerceAtLeast(0))), fontSize = 12.sp, color = TextSecondary)
-                }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    PlayerControl(stringResource(if (playRequested) R.string.pause else R.string.play), if (playRequested) TransportIcon.PAUSE else TransportIcon.PLAY,
-                        if (failure == null) Modifier.focusRequester(playFocus) else Modifier, failure == null) {
-                        if (player.playWhenReady) player.pause() else player.play()
+                    if (showTransport) {
+                        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(state.detail?.title?.name.orEmpty(), color = TextPrimary, fontSize = 24.sp, lineHeight = 30.sp,
+                                fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            state.episode?.let {
+                                MetadataRow(modifier = Modifier.padding(top = 1.dp), items = listOf(stringResource(R.string.episode, it.number, it.name)))
+                            }
+                            val shownPosition = preview ?: position
+                            val fraction = if (duration > 0) (shownPosition.toFloat() / duration).coerceIn(0f, 1f) else 0f
+                            val timelineLabel = stringResource(R.string.timeline)
+                            Canvas(Modifier.fillMaxWidth().height(24.dp).focusRequester(timelineFocus)
+                                .focusProperties { if (showSkip) up = skipFocus }.onFocusChanged { timelineFocused = it.isFocused; if (!it.isFocused) preview = null }
+                                .onPreviewKeyEvent { event ->
+                                    if (event.nativeKeyEvent.action != KeyEvent.ACTION_DOWN || !player.isCurrentMediaItemSeekable || duration <= 0) false
+                                    else when (event.nativeKeyEvent.keyCode) {
+                                        KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                                            val delta = if (event.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_DPAD_LEFT) -10000L else 10000L
+                                            preview = ((preview ?: position) + delta).coerceIn(0, duration); true
+                                        }
+                                        KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+                                            preview?.let(player::seekTo); preview = null; true
+                                        }
+                                        else -> false
+                                    }
+                                }.focusable(player.isCurrentMediaItemSeekable).semantics {
+                                    contentDescription = timelineLabel; progressBarRangeInfo = ProgressBarRangeInfo(fraction, 0f..1f)
+                                }) {
+                                val y = size.height / 2
+                                drawLine(Color.Black.copy(alpha = 0.7f), Offset(0f, y), Offset(size.width, y), 6.dp.toPx())
+                                drawLine(Color.White.copy(alpha = 0.38f), Offset(0f, y), Offset(size.width, y), 4.dp.toPx())
+                                drawLine(Accent, Offset(0f, y), Offset(size.width * fraction, y), 4.dp.toPx())
+                                // Segment markers show where a skip is available without leaving the video.
+                                if (duration > 0) state.segments?.markers(duration)?.forEach { (_, bounds) ->
+                                    val (from, to) = bounds
+                                    drawRect(Color.White.copy(alpha = 0.55f), Offset(size.width * from, y - 4.dp.toPx()),
+                                        androidx.compose.ui.geometry.Size(size.width * (to - from), 8.dp.toPx()))
+                                }
+                                if (timelineFocused) drawCircle(Color.Black.copy(alpha = .65f), 9.dp.toPx(), Offset(size.width * fraction, y))
+                                drawCircle(if (timelineFocused) Accent else Color.White, if (timelineFocused) 6.dp.toPx() else 4.dp.toPx(), Offset(size.width * fraction, y))
+                            }
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text(clock(shownPosition), fontSize = 12.sp, color = TextSecondary)
+                                Text(if (preview != null) stringResource(R.string.seek_preview, clock(shownPosition))
+                                    else stringResource(R.string.time_remaining, clock((duration - position).coerceAtLeast(0))), fontSize = 12.sp, color = TextSecondary)
+                            }
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                PlayerControl(stringResource(if (playRequested) R.string.pause else R.string.play), if (playRequested) TransportIcon.PAUSE else TransportIcon.PLAY,
+                                    if (failure == null) Modifier.focusRequester(playFocus) else Modifier, failure == null) {
+                                    if (player.playWhenReady) player.pause() else player.play()
+                                }
+                                PlayerControl(stringResource(R.string.seek_back), TransportIcon.BACKWARD, enabled = player.isCurrentMediaItemSeekable) { player.seekBack() }
+                                PlayerControl(stringResource(R.string.seek_forward), TransportIcon.FORWARD, enabled = player.isCurrentMediaItemSeekable) { player.seekForward() }
+                                Spacer(Modifier.weight(1f))
+                                if (episodes.isNotEmpty() && !episodesOpen) PlayerControl(stringResource(R.string.episodes), TransportIcon.EPISODES,
+                                    Modifier.focusRequester(episodesButtonFocus)) { controls = true; episodesOpen = true }
+                                if (!episodesOpen) {
+                                    PlayerControl(stringResource(R.string.settings), TransportIcon.SETTINGS, Modifier.focusRequester(settingsFocus)) { settings = true }
+                                    PlayerControl(stringResource(R.string.back), TransportIcon.EXIT) { vm.back() }
+                                }
+                            }
+                            failure?.let {
+                                if (it == Failure.VIP) AccessMessage(state.account) else FailureMessage(it, vm::refresh, Modifier.focusRequester(playFocus))
+                                if (it in listOf(Failure.SIGNED_OUT, Failure.EXPIRED, Failure.VIP, Failure.CAPACITY)) Action(stringResource(R.string.sign_in), if (it == Failure.VIP) Modifier.focusRequester(playFocus) else Modifier) { vm.signInForPlayback() }
+                            }
+                        }
                     }
-                    PlayerControl(stringResource(R.string.seek_back), TransportIcon.BACKWARD, enabled = player.isCurrentMediaItemSeekable) { player.seekBack() }
-                    PlayerControl(stringResource(R.string.seek_forward), TransportIcon.FORWARD, enabled = player.isCurrentMediaItemSeekable) { player.seekForward() }
-                    Spacer(Modifier.weight(1f))
-                    skippable?.takeIf { !episodesOpen }?.let { segment ->
-                        GlassButton(segmentLabel(segment.type), variant = GlassButtonVariant.PRIMARY,
-                            modifier = Modifier.heightIn(min = 56.dp)) { skip(segment) }
-                    }
-                    if (episodes.isNotEmpty() && !episodesOpen) PlayerControl(stringResource(R.string.episodes), TransportIcon.EPISODES,
-                        Modifier.focusRequester(episodesButtonFocus)) { controls = true; episodesOpen = true }
-                    if (!episodesOpen) {
-                        PlayerControl(stringResource(R.string.settings), TransportIcon.SETTINGS, Modifier.focusRequester(settingsFocus)) { settings = true }
-                        PlayerControl(stringResource(R.string.back), TransportIcon.EXIT) { vm.back() }
-                    }
-                }
-                failure?.let {
-                    if (it == Failure.VIP) AccessMessage(state.account) else FailureMessage(it, vm::refresh, Modifier.focusRequester(playFocus))
-                    if (it in listOf(Failure.SIGNED_OUT, Failure.EXPIRED, Failure.VIP, Failure.CAPACITY)) Action(stringResource(R.string.sign_in), if (it == Failure.VIP) Modifier.focusRequester(playFocus) else Modifier) { vm.signInForPlayback() }
                 }
             }
-        }
         }
         if (settings) {
             GlassDrawer(
@@ -427,38 +483,12 @@ import kotlinx.coroutines.delay
                 }
             }
         }
-        // A skip stays reachable while transport is hidden, the way streaming clients do it.
-        if (skippable != null && failure == null && !episodesOpen) Box(Modifier.align(Alignment.BottomEnd).padding(safe).padding(bottom = 28.dp)) {
-            GlassButton(segmentLabel(skippable.type), variant = GlassButtonVariant.PRIMARY,
-                modifier = Modifier.heightIn(min = 56.dp)) { skip(skippable) }
-        }
-        // Next-episode card appears over the ended video; Back or Cancel dismisses it.
-        if (ended && next != null) {
-            Box(Modifier.align(Alignment.Center).padding(safe)) {
-                GlassSurface(Modifier.widthIn(max = 520.dp)) {
-                    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                        Text(stringResource(R.string.next_episode), color = TextPrimary, fontSize = 28.sp,
-                            fontWeight = FontWeight.Bold)
-                        Text(stringResource(R.string.episode, next.number, next.name), color = TextSecondary,
-                            fontSize = 18.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        if (autoplay) Text(stringResource(R.string.next_episode_in, countdown), color = Accent,
-                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            GlassButton(stringResource(R.string.play_next), Modifier.focusRequester(nextFocus),
-                                variant = GlassButtonVariant.PRIMARY) { vm.play(next) }
-                            GlassButton(stringResource(R.string.cancel)) { ended = false; countdown = 0 }
-                            GlassButton(stringResource(R.string.back)) { ended = false; countdown = 0; vm.back() }
-                        }
-                    }
-                }
-            }
-        }
         // A separate viewport also contains explicitly positioned cues above transport.
         if (failure == null) BoxWithConstraints(Modifier.fillMaxSize().padding(safe)) {
             AndroidView(factory = { SubtitleView(it).apply { setUserDefaultStyle(); setUserDefaultTextSize(); setBottomPaddingFraction(0.04f) } },
                 modifier = Modifier.fillMaxSize().padding(end = if (settings || episodesOpen)
                     maxOf(320.dp, minOf(620.dp, maxWidth * .36f)) else 0.dp,
-                bottom = if (controls && !settings && !ended) maxOf(0.dp, controlsHeight - 20.dp) else 0.dp),
+                bottom = if (showBottomArea) bottomAreaHeight + 8.dp else 0.dp),
                 update = { subtitles -> subtitles.setCues(cues) })
         }
         if (buffering && failure == null) GlassSurface(Modifier.align(Alignment.Center)) { Loading() }
