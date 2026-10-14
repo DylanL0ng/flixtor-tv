@@ -142,11 +142,11 @@ class VisualQaTest {
                 assertEquals(Screen.PLAYER, mutable.value.screen)
                 key(KeyEvent.KEYCODE_DPAD_DOWN)
                 instrument.runOnMainSync { mutable.value = mutable.value.copy(segments = segment(SegmentType.CREDITS, 60000)) }
-                awaitCondition("Exactly one credits action") { actions(R.string.skip_credits).size == 1 }
-                // Transport begins at Play: Right traverses rewind, forward, Episodes, Settings.
-                repeat(4) { key(KeyEvent.KEYCODE_DPAD_RIGHT) }
+                awaitCondition("Credits offer next episode before the end") { actions(R.string.play_next).size == 1 }
+                // Transport begins at Play: rewind, forward, editor, Episodes, Settings.
+                repeat(5) { key(KeyEvent.KEYCODE_DPAD_RIGHT) }
                 key(KeyEvent.KEYCODE_DPAD_CENTER)
-                awaitCondition("Settings suppresses skip") { visible(R.string.quality) && actions(R.string.skip_credits).isEmpty() }
+                awaitCondition("Settings suppresses next prompt") { visible(R.string.quality) && actions(R.string.play_next).isEmpty() }
                 capture("player-skip-settings-${fit.horizontal}")
                 key(KeyEvent.KEYCODE_BACK)
                 awaitCondition("Settings restores initiating focus") { nodes().any { it.label == label(R.string.settings) && it.focused } }

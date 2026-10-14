@@ -3,6 +3,7 @@ package dev.personal.flixtortv
 import android.app.Activity
 import android.view.KeyEvent
 import android.view.WindowManager
+import android.os.SystemClock
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -29,6 +30,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
@@ -60,7 +62,7 @@ import androidx.tv.material3.Text
 import kotlinx.coroutines.delay
 
 private enum class PlayerDrawer { SETTINGS, EPISODES }
-private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLAY, SKIP }
+private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLAY, SKIP, BUFFER }
 
 @Composable internal fun PlaybackScreen(stream: Stream, state: TvState, vm: TvViewModel) {
     // A retry or another episode may reuse the same stream URL. The session owns player identity.
@@ -88,8 +90,25 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
     val episodesOpen = drawer == PlayerDrawer.EPISODES
     var ended by remember(stream) { mutableStateOf(vm.watchingSession.finished) }
     var countdown by remember(stream) { mutableIntStateOf(0) }
-    var marking by remember(stream) { mutableStateOf<SegmentType?>(null) }
-    var markStart by remember(stream) { mutableLongStateOf(0) }
+    var editorOpen by remember(stream) { mutableStateOf(false) }
+    var editingRegion by remember(stream) { mutableStateOf<SkipSegment?>(null) }
+    var editorOrigin by remember(stream) { mutableLongStateOf(0) }
+    var editorResume by remember(stream) { mutableStateOf(false) }
+    var returnToEditor by remember(stream) { mutableStateOf(false) }
+    val editFocus = remember(stream) { FocusRequester() }
+    var undoRegion by remember(stream) { mutableStateOf<SkipSegment?>(null) }
+    val nextClock = remember(stream) { NextEpisodeCountdown() }
+    var nextCancelled by remember(stream) { mutableStateOf(false) }
+    var skippedCredits by remember(stream) { mutableStateOf<SkipSegment?>(null) }
+    val loadControl = remember(stream) { PlaybackBuffer() }
+    var bufferAhead by remember(stream) { mutableStateOf(false) }
+    var bufferResume by remember(stream) { mutableStateOf(false) }
+    var bufferPreviousMode by remember(stream) { mutableStateOf(false) }
+    var buffered by remember(stream) { mutableLongStateOf(0) }
+    var bufferComplete by remember(stream) { mutableStateOf(false) }
+    var bufferStalled by remember(stream) { mutableStateOf(false) }
+    var bufferRestart by remember(stream) { mutableIntStateOf(0) }
+    val bufferFocus = remember(stream) { FocusRequester() }
     // Segment types already used this playback, so a skip never re-offers itself.
     val skipped = remember(stream) { mutableStateListOf<String>() }
     var playing by remember(stream) { mutableStateOf(false) }
@@ -110,22 +129,23 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
     var skipFocused by remember(stream) { mutableStateOf(false) }
     val episodes = state.detail?.takeIf { it.title.isSeries }?.ordered ?: emptyList()
     val segments = state.segments?.items.orEmpty()
-    val active = segments.firstOrNull { it.contains(position) }
+    val active = segments.filter { it.contains(position) && it.endMs <= duration }.maxByOrNull { it.startMs }
     // The skip affordance only appears while inside a segment that has not been used.
-    val skippable = active?.takeIf { it.type.read !in skipped }
+    val skippable = active?.takeIf { it.id !in skipped && vm.action(it) != SkipAction.OFF }
     var preview by remember(stream) { mutableStateOf<Long?>(null) }
     var timelineFocused by remember(stream) { mutableStateOf(false) }
     val safe = LocalSafePadding.current
     val layoutDirection = LocalLayoutDirection.current
     val density = LocalDensity.current
     var bottomAreaHeight by remember(stream) { mutableStateOf(0.dp) }
-    val showTransport = controls && !ended && !awaitingConfirmation
-    val showSkip = skippable != null && failure == null && !settings && !episodesOpen && !ended && !awaitingConfirmation
+    val showTransport = controls && !ended && !awaitingConfirmation && !editorOpen && !bufferAhead
+    val showSkip = skippable != null && failure == null && !settings && !episodesOpen && !ended && !awaitingConfirmation && !editorOpen && !bufferAhead
     val skipVisible by rememberUpdatedState(showSkip)
     val player = remember(stream) {
         val http = OkHttpDataSource.Factory(if (state.detail?.title?.source == ContentSource.HIANIME) vm.anime.mediaClient else vm.client.mediaClient).setUserAgent(FlixtorClient.USER_AGENT)
             .setDefaultRequestProperties(stream.headers)
         ExoPlayer.Builder(context)
+            .setLoadControl(loadControl.apply { larger = state.profile?.largerBuffer == true })
             .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(context, http)))
             .setSeekBackIncrementMs(10000).setSeekForwardIncrementMs(10000).build().apply {
                 setAudioAttributes(AudioAttributes.DEFAULT, true); setHandleAudioBecomingNoisy(true)
@@ -143,6 +163,40 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
         player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
             .setMaxVideoSize(Int.MAX_VALUE, state.profile?.quality?.takeIf { it > 0 } ?: Int.MAX_VALUE)
             .setForceHighestSupportedBitrate(false).build()
+    }
+    LaunchedEffect(state.profile?.largerBuffer) { loadControl.larger = state.profile?.largerBuffer == true }
+    fun closeEditor() {
+        editorOpen = false; player.seekTo(editorOrigin); controls = true; returnToEditor = true
+        if (editorResume && lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) && !awaitingConfirmation && !choosingVersion && failure == null) player.play()
+        editorResume = false
+    }
+    fun openEditor(region: SkipSegment?) {
+        editorOrigin = player.currentPosition; editorResume = player.playWhenReady
+        player.pause(); preview = null; drawer = null; controls = true
+        editingRegion = region; editorOpen = true
+    }
+    fun closeBuffer(play: Boolean) {
+        bufferAhead = false; loadControl.larger = bufferPreviousMode; controls = true
+        if (play && lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) && !awaitingConfirmation && !choosingVersion && failure == null) player.play()
+        bufferResume = false
+    }
+    fun startBuffer() {
+        bufferResume = player.playWhenReady; bufferPreviousMode = loadControl.larger
+        player.pause(); loadControl.larger = true; drawer = null; preview = null; controls = true
+        bufferComplete = false; bufferStalled = false; bufferAhead = true
+    }
+    LaunchedEffect(bufferAhead, bufferRestart) {
+        if (!bufferAhead) return@LaunchedEffect
+        var lastPosition = player.bufferedPosition
+        var grewAt = SystemClock.elapsedRealtime()
+        while (true) {
+            val ahead = (player.bufferedPosition - player.currentPosition).coerceAtLeast(0)
+            val remaining = (player.duration - player.currentPosition).coerceAtLeast(0)
+            if (player.bufferedPosition > lastPosition) { lastPosition = player.bufferedPosition; grewAt = SystemClock.elapsedRealtime() }
+            bufferComplete = player.duration > 0 && bufferReady(ahead, remaining, loadControl.allocator.totalBytesAllocated, loadControl.byteTarget)
+            bufferStalled = !bufferComplete && SystemClock.elapsedRealtime() - grewAt >= 15000
+            delay(250)
+        }
     }
     DisposableEffect(player) {
         playRequested = player.playWhenReady
@@ -165,7 +219,7 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
             }
             override fun onPlaybackStateChanged(value: Int) {
                 buffering = value == Player.STATE_BUFFERING
-                if (value == Player.STATE_ENDED) {
+                if (value == Player.STATE_ENDED && !editorOpen && !bufferAhead) {
                     identity?.let { vm.saveProgress(it, player.duration.coerceAtLeast(0), player.duration.coerceAtLeast(0)) }
                     watch()
                     vm.playbackEnded(playbackToken)
@@ -185,7 +239,7 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
                 val key = androidx.core.content.IntentCompat.getParcelableExtra(intent,
                     android.content.Intent.EXTRA_KEY_EVENT, KeyEvent::class.java)
                 if (key?.action == KeyEvent.ACTION_DOWN) vm.recordPlaybackInteraction()
-                return vm.watchingSession.pending || vm.state.value.animeChoice != null
+                return vm.watchingSession.pending || vm.state.value.animeChoice != null || editorOpen || bufferAhead
             }
             @Suppress("OVERRIDE_DEPRECATION") // Media3 1.4.1 command gate keeps pending confirmation authoritative.
             override fun onPlayerCommandRequest(session: MediaSession, controller: MediaSession.ControllerInfo,
@@ -200,7 +254,9 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
                     Player.COMMAND_SET_SPEED_AND_PITCH, Player.COMMAND_SET_TRACK_SELECTION_PARAMETERS)
                 if (transport) {
                     vm.recordPlaybackInteraction()
-                    if (vm.watchingSession.pending || vm.state.value.animeChoice != null) return SessionError.ERROR_INVALID_STATE
+                    if (playerCommand in setOf(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM, Player.COMMAND_SEEK_BACK,
+                        Player.COMMAND_SEEK_FORWARD, Player.COMMAND_SEEK_TO_DEFAULT_POSITION)) skippedCredits = null
+                    if (vm.watchingSession.pending || vm.state.value.animeChoice != null || editorOpen || bufferAhead) return SessionError.ERROR_INVALID_STATE
                 }
                 return SessionResult.RESULT_SUCCESS
             }
@@ -212,6 +268,8 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
             if (event == Lifecycle.Event.ON_STOP) {
                 if (!ended) identity?.let { vm.saveProgress(it, player.currentPosition, player.duration) }
                 player.pause()
+                editorResume = false; bufferResume = false
+                if (bufferAhead) { bufferAhead = false; loadControl.larger = bufferPreviousMode }
             }
             if (event == Lifecycle.Event.ON_RESUME) { controls = true; watch(true) }
         }
@@ -226,9 +284,11 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
     LaunchedEffect(player) {
         var tick = 0
         while (true) {
-            delay(500); position = player.currentPosition.coerceAtLeast(0); duration = player.duration.coerceAtLeast(0)
+            delay(250); position = player.currentPosition.coerceAtLeast(0); duration = player.duration.coerceAtLeast(0)
+            buffered = player.bufferedPosition.coerceAtLeast(0)
+            vm.playerDuration(playbackToken, duration)
             vm.watchPlayback(playbackToken, player.isPlaying, lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
-            if (++tick % 10 == 0 && player.isPlaying) identity?.let { vm.saveProgress(it, position, duration) }
+            if (++tick % 20 == 0 && player.isPlaying) identity?.let { vm.saveProgress(it, position, duration) }
         }
     }
     var resumeAfterChoice by remember(stream) { mutableStateOf(false) }
@@ -242,32 +302,56 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
             if (lifecycleState == Lifecycle.State.RESUMED && !ended && !awaitingConfirmation) player.play()
         }
     }
-    LaunchedEffect(controls, settings, episodesOpen, interaction, failure, playing, preview, ended, skipFocused) {
-        if (controls && !settings && !episodesOpen && !ended && preview == null && failure == null && playing && !skipFocused) {
+    LaunchedEffect(controls, settings, episodesOpen, interaction, failure, playing, preview, ended, skipFocused, editorOpen, bufferAhead) {
+        if (controls && !settings && !episodesOpen && !ended && preview == null && failure == null && playing && !skipFocused && !editorOpen && !bufferAhead) {
             delay(6000); controls = false
         }
     }
     val autoplay = state.profile?.autoplay != false && !state.animeAutoplayBlocked
     val next = state.detail?.next(state.episode)
+    val credits = segments.firstOrNull { it.type == SegmentType.CREDITS && it.contains(position) && it.endMs <= duration }
+        ?: skippedCredits?.takeIf { skippedRegion -> position >= skippedRegion.endMs &&
+            vm.action(skippedRegion) == SkipAction.AUTO && segments.any { it.id == skippedRegion.id } }
+    val nextEligible = next != null && (ended || credits != null)
+    val countdownEnabled = autoplay && !nextCancelled && (ended || vm.creditsAutoplayAllowed(playbackToken))
     // Autoplay drives only the next episode; skip segments are always manual, like Netflix.
     fun skip(segment: SkipSegment) {
-        skipped.add(segment.type.read)
+        skipped.add(segment.id)
         player.seekTo(segment.endMs)
     }
-    LaunchedEffect(ended, next?.key, autoplay, awaitingConfirmation, lifecycleState, choosingVersion) {
-        if (!ended || next == null || !autoplay || awaitingConfirmation || choosingVersion || lifecycleState != Lifecycle.State.RESUMED) return@LaunchedEffect
-        countdown = NEXT_EPISODE_SECONDS
-        while (countdown > 0) { delay(1000); countdown-- }
-        vm.autoplayNext(playbackToken, next)
+    val canCount = countdownEnabled && !awaitingConfirmation && !choosingVersion && lifecycleState == Lifecycle.State.RESUMED &&
+        failure == null && !buffering && !editorOpen && !bufferAhead && drawer == null && preview == null && (ended || playing)
+    LaunchedEffect(nextEligible, next?.key, canCount, ended) {
+        while (true) {
+            val advance = nextClock.tick(SystemClock.elapsedRealtime(), nextEligible, canCount)
+            countdown = ((nextClock.remainingMs + 999) / 1000).toInt()
+            if (advance && next != null) {
+                if (vm.autoplayNext(playbackToken, next, if (ended) null else player.currentPosition, duration, skippedCredits?.id)) ended = true
+                break
+            }
+            delay(100)
+        }
+    }
+    LaunchedEffect(position, skippable?.id, state.skipRevision, playing, editorOpen, bufferAhead, drawer, preview, awaitingConfirmation) {
+        if (playing && !editorOpen && !bufferAhead && drawer == null && preview == null && !awaitingConfirmation && failure == null && !choosingVersion &&
+            skippable != null && vm.action(skippable) == SkipAction.AUTO) {
+            if (skippable.type == SegmentType.CREDITS && next != null) skippedCredits = skippable
+            undoRegion = skippable; skip(skippable)
+        }
+    }
+    LaunchedEffect(undoRegion?.id) {
+        if (undoRegion != null) { delay(5000); undoRegion = null }
     }
     var returnToDrawer by remember(stream) { mutableStateOf<PlayerDrawer?>(null) }
     fun openDrawer(value: PlayerDrawer) { preview = null; controls = true; settingsPage = PlayerSettingsPage.ROOT; settingsOrigin = PlayerSettingsPage.QUALITY; drawer = value }
     fun closeDrawer() { returnToDrawer = drawer; drawer = null }
     fun closeOverlay() {
         when {
+            editorOpen -> closeEditor()
+            bufferAhead -> closeBuffer(bufferResume)
             settings && settingsPage != PlayerSettingsPage.ROOT -> settingsPage = PlayerSettingsPage.ROOT
             drawer != null -> closeDrawer()
-            ended -> { ended = false; countdown = 0 }
+            ended || nextEligible && !nextCancelled -> { nextClock.cancel(); nextCancelled = true; ended = false; countdown = 0 }
             preview != null -> preview = null
             else -> controls = false
         }
@@ -288,7 +372,7 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
             }
         }
     }
-    BackHandler(ended || preview != null || settings || episodesOpen || controls) { closeOverlay() }
+    BackHandler(ended || preview != null || settings || episodesOpen || controls || editorOpen || bufferAhead || nextEligible && !nextCancelled) { closeOverlay() }
     val view = remember(player) { PlayerView(context).apply {
         this.player = player; useController = false; isFocusable = false
         descendantFocusability = android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS
@@ -301,7 +385,11 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
         if (key.action != KeyEvent.ACTION_DOWN) return@onPreviewKeyEvent false
         if (vm.watchingSession.pending) return@onPreviewKeyEvent true
         // Drawer controls own navigation; the focus group prevents escape to transport.
-        if (drawer != null) {
+        if (editorOpen || bufferAhead) {
+            if (key.keyCode == KeyEvent.KEYCODE_BACK) { closeOverlay(); true }
+            else if (key.keyCode in listOf(KeyEvent.KEYCODE_MEDIA_PLAY, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+                KeyEvent.KEYCODE_MEDIA_PAUSE, KeyEvent.KEYCODE_MEDIA_REWIND, KeyEvent.KEYCODE_MEDIA_FAST_FORWARD)) true else false
+        } else if (drawer != null) {
             when (key.keyCode) {
                 KeyEvent.KEYCODE_BACK -> { closeOverlay(); true }
                 else -> false
@@ -316,10 +404,11 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
                 KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> { if (player.playWhenReady) player.pause() else player.play(); true }
                 KeyEvent.KEYCODE_MEDIA_PLAY -> { player.play(); true }
                 KeyEvent.KEYCODE_MEDIA_PAUSE -> { player.pause(); true }
-                KeyEvent.KEYCODE_MEDIA_REWIND -> { player.seekBack(); true }
-                KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> { player.seekForward(); true }
+                KeyEvent.KEYCODE_MEDIA_REWIND -> { skippedCredits = null; player.seekBack(); true }
+                KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> { skippedCredits = null; player.seekForward(); true }
                 KeyEvent.KEYCODE_DPAD_UP -> {
-                    if (!controls && showSkip) { skipFocus.requestFocus(); true }
+                    if (!controls && nextEligible && !nextCancelled) { nextFocus.requestFocus(); true }
+                    else if (!controls && showSkip) { skipFocus.requestFocus(); true }
                     else if (!controls && !ended) { controls = true; true } else false
                 }
                 KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
@@ -335,15 +424,23 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
         val safeWidth = maxWidth - safe.calculateLeftPadding(layoutDirection) - safe.calculateRightPadding(layoutDirection)
         val drawerWidth = maxOf(320.dp, minOf(620.dp, safeWidth * .36f)).coerceAtMost(safeWidth)
         AndroidView(factory = { view }, modifier = Modifier.fillMaxSize())
-        val showNext = ended && next != null && !settings && !episodesOpen && !awaitingConfirmation
+        val showNext = nextEligible && (ended || !nextCancelled) && !settings && !episodesOpen && !awaitingConfirmation && !editorOpen && !bufferAhead && failure == null
         val showBottomArea = showTransport || showSkip || showNext
+        // A separate viewport also contains explicitly positioned cues above transport.
+        if (failure == null) Box(Modifier.fillMaxSize().padding(safe)) {
+            AndroidView(factory = { SubtitleView(it).apply { setUserDefaultStyle(); setUserDefaultTextSize(); setBottomPaddingFraction(0.04f) } },
+                modifier = Modifier.fillMaxSize().padding(end = if (drawer != null) drawerWidth + 16.dp else 0.dp,
+                bottom = if (showBottomArea || editorOpen || bufferAhead) bottomAreaHeight + 8.dp else 0.dp),
+                update = { subtitles -> subtitles.setCues(cues) })
+        }
         if (showBottomArea) {
             BoxWithConstraints(Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(safe)) {
                 // These targets attach during this subcomposition, before its effects run.
                 LaunchedEffect(controls, drawer, ended, failure) {
                     when {
-                        showNext -> nextFocus.requestFocus()
+                        showNext && ended -> nextFocus.requestFocus()
                         drawer != null -> Unit
+                        returnToEditor -> { editFocus.requestFocus(); returnToEditor = false }
                         controls && returnToDrawer != null -> {
                             if (returnToDrawer == PlayerDrawer.SETTINGS) settingsFocus.requestFocus()
                             else episodesButtonFocus.requestFocus()
@@ -368,24 +465,31 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
                                     fontWeight = FontWeight.Bold)
                                 Text(episodeLabel(next), color = TextSecondary,
                                     fontSize = 18.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                if (autoplay) Text(stringResource(R.string.next_episode_in, countdown), color = Accent,
+                                if (countdownEnabled) Text(stringResource(R.string.next_episode_in, countdown), color = Accent,
                                     modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
                                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                     GlassButton(stringResource(R.string.play_next), Modifier.focusRequester(nextFocus),
-                                        variant = GlassButtonVariant.PRIMARY) { vm.play(next) }
-                                    GlassButton(stringResource(R.string.cancel)) { ended = false; countdown = 0 }
-                                    GlassButton(stringResource(R.string.back)) { ended = false; countdown = 0; vm.back() }
+                                        variant = GlassButtonVariant.PRIMARY) { if (vm.playNext(playbackToken, next, duration)) ended = true }
+                                    GlassButton(stringResource(R.string.cancel)) { nextClock.cancel(); nextCancelled = true; ended = false; countdown = 0 }
+                                    if (ended) GlassButton(stringResource(R.string.back)) { nextClock.cancel(); vm.back() }
                                 }
                             }
                         }
                     } else if (showSkip && skippable != null) {
-                        GlassButton(segmentLabel(skippable.type), variant = GlassButtonVariant.PRIMARY,
+                        GlassButton(regionLabel(skippable, vm), variant = GlassButtonVariant.PRIMARY,
                             modifier = Modifier.heightIn(min = 56.dp).focusRequester(skipFocus)
                                 .focusProperties { if (showTransport) down = if (player.isCurrentMediaItemSeekable) timelineFocus else playFocus }
                                 .onFocusChanged {
                                     // Keep focus identity through removal so its replacement can receive focus.
                                     if (it.isFocused || skipVisible) skipFocused = it.isFocused
                                 }) { skip(skippable) }
+                    }
+                    undoRegion?.takeIf { !editorOpen && !bufferAhead }?.let { region ->
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(stringResource(R.string.region_skipped, if (region.type == SegmentType.CUSTOM)
+                                vm.customTypes().firstOrNull { it.id == region.typeId }?.label.orEmpty() else typeLabel(region.type)), color = TextPrimary)
+                            GlassButton(stringResource(R.string.region_undo)) { skippedCredits = null; player.seekTo(region.startMs); undoRegion = null }
+                        }
                     }
                     if (showTransport) {
                         Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -396,38 +500,13 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
                             }
                             state.version?.let { Text(animeVersionLabel(it), color = TextSecondary, fontSize = 13.sp) }
                             val shownPosition = preview ?: position
-                            val fraction = if (duration > 0) (shownPosition.toFloat() / duration).coerceIn(0f, 1f) else 0f
                             val timelineLabel = stringResource(R.string.timeline)
-                            Canvas(Modifier.fillMaxWidth().height(24.dp).focusRequester(timelineFocus)
-                                .focusProperties { if (showSkip) up = skipFocus }.onFocusChanged { timelineFocused = it.isFocused; if (!it.isFocused) preview = null }
-                                .onPreviewKeyEvent { event ->
-                                    if (event.nativeKeyEvent.action != KeyEvent.ACTION_DOWN || !player.isCurrentMediaItemSeekable || duration <= 0) false
-                                    else when (event.nativeKeyEvent.keyCode) {
-                                        KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                                            val delta = if (event.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_DPAD_LEFT) -10000L else 10000L
-                                            preview = ((preview ?: position) + delta).coerceIn(0, duration); true
-                                        }
-                                        KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
-                                            preview?.let(player::seekTo); preview = null; true
-                                        }
-                                        else -> false
-                                    }
-                                }.focusable(player.isCurrentMediaItemSeekable).semantics {
-                                    contentDescription = timelineLabel; progressBarRangeInfo = ProgressBarRangeInfo(fraction, 0f..1f)
-                                }) {
-                                val y = size.height / 2
-                                drawLine(Color.Black.copy(alpha = 0.7f), Offset(0f, y), Offset(size.width, y), 6.dp.toPx())
-                                drawLine(Color.White.copy(alpha = 0.38f), Offset(0f, y), Offset(size.width, y), 4.dp.toPx())
-                                drawLine(Accent, Offset(0f, y), Offset(size.width * fraction, y), 4.dp.toPx())
-                                // Segment markers show where a skip is available without leaving the video.
-                                if (duration > 0) state.segments?.markers(duration)?.forEach { (_, bounds) ->
-                                    val (from, to) = bounds
-                                    drawRect(Color.White.copy(alpha = 0.55f), Offset(size.width * from, y - 4.dp.toPx()),
-                                        androidx.compose.ui.geometry.Size(size.width * (to - from), 8.dp.toPx()))
-                                }
-                                if (timelineFocused) drawCircle(Color.Black.copy(alpha = .65f), 9.dp.toPx(), Offset(size.width * fraction, y))
-                                drawCircle(if (timelineFocused) Accent else Color.White, if (timelineFocused) 6.dp.toPx() else 4.dp.toPx(), Offset(size.width * fraction, y))
-                            }
+                            PlayerTimeline(shownPosition, duration, segments, timelineLabel,
+                                Modifier.fillMaxWidth().height(32.dp).focusRequester(timelineFocus)
+                                    .focusProperties { if (showNext) up = nextFocus else if (showSkip) up = skipFocus }
+                                    .onFocusChanged { timelineFocused = it.isFocused; if (!it.isFocused) preview = null },
+                                buffered = buffered, enabled = player.isCurrentMediaItemSeekable && duration > 0,
+                                onMove = { skippedCredits = null; preview = it }, onCommit = { preview?.let(player::seekTo); preview = null })
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Text(clock(shownPosition), fontSize = 12.sp, color = TextSecondary)
                                 Text(if (preview != null) stringResource(R.string.seek_preview, clock(shownPosition))
@@ -438,9 +517,11 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
                                     if (failure == null) Modifier.focusRequester(playFocus) else Modifier, failure == null) {
                                     if (player.playWhenReady) player.pause() else player.play()
                                 }
-                                PlayerControl(stringResource(R.string.seek_back), TransportIcon.BACKWARD, enabled = player.isCurrentMediaItemSeekable) { player.seekBack() }
-                                PlayerControl(stringResource(R.string.seek_forward), TransportIcon.FORWARD, enabled = player.isCurrentMediaItemSeekable) { player.seekForward() }
+                                PlayerControl(stringResource(R.string.seek_back), TransportIcon.BACKWARD, enabled = player.isCurrentMediaItemSeekable) { skippedCredits = null; player.seekBack() }
+                                PlayerControl(stringResource(R.string.seek_forward), TransportIcon.FORWARD, enabled = player.isCurrentMediaItemSeekable) { skippedCredits = null; player.seekForward() }
                                 Spacer(Modifier.weight(1f))
+                                if (drawer == null) PlayerControl(stringResource(R.string.edit_regions), TransportIcon.REGIONS, Modifier.focusRequester(editFocus),
+                                    enabled = player.isCurrentMediaItemSeekable && duration > 0 && failure == null) { openEditor(null) }
                                 if (episodes.isNotEmpty() && drawer == null) PlayerControl(stringResource(R.string.episodes), TransportIcon.EPISODES,
                                     Modifier.focusRequester(episodesButtonFocus)) { openDrawer(PlayerDrawer.EPISODES) }
                                 if (drawer == null) {
@@ -453,6 +534,7 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
                                 if (vm.isAnime) Action(stringResource(R.string.anime_change_version)) { vm.play(state.episode) }
                                 if (!vm.isAnime && it in listOf(Failure.SIGNED_OUT, Failure.EXPIRED, Failure.VIP, Failure.CAPACITY)) Action(stringResource(R.string.sign_in), if (it == Failure.VIP) Modifier.focusRequester(playFocus) else Modifier) { vm.signInForPlayback() }
                             }
+                            if (buffering && failure == null) Action(stringResource(R.string.buffer_ahead), enabled = duration > 0) { startBuffer() }
                         }
                     }
                 }
@@ -474,6 +556,7 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
                 PlayerSettingsPage.SUBTITLES to stringResource(R.string.subtitles),
                 PlayerSettingsPage.AUTOPLAY to stringResource(R.string.autoplay_next),
                 PlayerSettingsPage.SKIP to stringResource(R.string.skip_segments),
+                PlayerSettingsPage.BUFFER to stringResource(R.string.buffering_mode),
             )
             fun openPage(page: PlayerSettingsPage) { settingsOrigin = page; settingsPage = page }
             GlassDrawer(
@@ -520,6 +603,11 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
                                 MenuRow(titles.getValue(PlayerSettingsPage.SKIP),
                                     modifier = Modifier.focusRequester(settingsRows.getValue(PlayerSettingsPage.SKIP))) { openPage(PlayerSettingsPage.SKIP) }
                             }
+                            item(key = "buffer") {
+                                MenuRow(titles.getValue(PlayerSettingsPage.BUFFER),
+                                    value = stringResource(if (state.profile?.largerBuffer == true) R.string.buffering_larger else R.string.buffering_normal),
+                                    modifier = Modifier.focusRequester(settingsRows.getValue(PlayerSettingsPage.BUFFER))) { openPage(PlayerSettingsPage.BUFFER) }
+                            }
                         }
                     }
                     PlayerSettingsPage.QUALITY -> {
@@ -542,45 +630,16 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
                         Text(stringResource(R.string.autoplay_help), color = TextSecondary, fontSize = 13.sp)
                         ChoiceList(autoplayOptions, autoplay, Modifier.weight(1f)) { vm.setAutoplay(it); settingsPage = PlayerSettingsPage.ROOT }
                     }
+                    PlayerSettingsPage.BUFFER -> {
+                        LaunchedEffect(Unit) { withFrameNanos { }; headerBack.requestFocus() }
+                        Text(stringResource(R.string.buffer_help), color = Muted, fontSize = 13.sp)
+                        OptionPicker(stringResource(R.string.buffering_mode), bufferChoices(), state.profile?.largerBuffer == true) { vm.setBuffering(it) }
+                        Action(stringResource(R.string.buffer_ahead), enabled = duration > 0 && failure == null) { startBuffer() }
+                    }
                     PlayerSettingsPage.SKIP -> {
                         LaunchedEffect(Unit) { withFrameNanos { }; headerBack.requestFocus() }
                         LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(vertical = 4.dp)) {
-                            item {
-                                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(stringResource(if (vm.isAnime) R.string.anime_skip_help else R.string.skip_segments_help), color = Muted, fontSize = 13.sp)
-                    val imdbId = vm.imdbId()
-                    if (!vm.isAnime) Field(stringResource(R.string.imdb_id), imdbId.orEmpty(), { vm.setImdbId(it.take(12)) })
-                    if (state.segmentsLoading) Text(stringResource(R.string.loading), color = Muted, fontSize = 13.sp)
-                    if (state.segments?.none == true && !state.segmentsLoading) {
-                        Text(stringResource(R.string.no_segments), color = Muted, fontSize = 13.sp)
-                    }
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        SegmentType.entries.forEach { type ->
-                            val existing = segments.firstOrNull { it.type == type }
-                            Text(segmentLabel(type), color = TextPrimary, fontSize = 16.sp)
-                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Text(if (existing != null) "${clock(existing.startMs)} – ${clock(existing.endMs)}"
-                                    else stringResource(R.string.segment_unmarked), color = Muted, fontSize = 13.sp,
-                                    modifier = Modifier.weight(1f))
-                                Action(stringResource(if (marking == type) R.string.segment_mark_end else R.string.segment_mark)) {
-                                    if (marking == type) {
-                                        vm.markSegment(type, markStart, player.currentPosition); marking = null
-                                    } else { marking = type; markStart = player.currentPosition }
-                                }
-                            }
-                        }
-                    }
-                    Text(stringResource(if (marking != null) R.string.segment_marking else R.string.segment_mark_help),
-                        color = if (marking != null) Accent else Muted, fontSize = 13.sp,
-                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
-                    if (!vm.isAnime) Text(stringResource(if (vm.canSubmit) R.string.introdb_key_stored else R.string.introdb_key_unavailable),
-                        color = if (vm.canSubmit) Accent else Muted, fontSize = 13.sp)
-                    Action(stringResource(R.string.segment_clear), enabled = vm.markedSegments().isNotEmpty()) {
-                        SegmentType.entries.forEach(vm::clearMarked)
-                    }
-                    if (!vm.isAnime) Action(stringResource(R.string.segment_submit), enabled = vm.markedSegments().isNotEmpty() && vm.canSubmit) { vm.submitSegments() }
-                                }
-                            }
+                            item { SkipSettings(state, vm, player.isCurrentMediaItemSeekable && duration > 0 && failure == null, ::openEditor) }
                         }
                     }
                 }
@@ -589,21 +648,33 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
         if (episodesOpen) {
             val title = state.detail?.title
             val seasons = remember(episodes) { episodes.map { it.season }.distinct().sorted() }
-            var picked by remember(stream) { mutableIntStateOf(0) }
+            val target = remember(episodes, state.episode?.key) { episodeDrawerTarget(episodes, state.episode) }
+            var picked by remember(stream) { mutableIntStateOf(target?.first ?: 0) }
             val activeSeason = if (seasons.contains(picked)) picked else seasons.firstOrNull() ?: 0
+            val seasonEpisodes = episodes.filter { it.season == activeSeason }
+            val episodeList = androidx.compose.foundation.lazy.rememberLazyListState()
+            val currentFocus = remember { FocusRequester() }
+            var focusIndex by remember(stream) { mutableIntStateOf(target?.second ?: 0) }
             GlassDrawer(
                 onDismiss = ::closeDrawer,
                 width = drawerWidth,
                 modifier = Modifier.padding(safe).padding(vertical = 14.dp),
             ) {
-                LaunchedEffect(Unit) { withFrameNanos { }; episodesFocus.requestFocus() }
+                LaunchedEffect(activeSeason) {
+                    if (seasonEpisodes.isEmpty()) { withFrameNanos { }; episodesFocus.requestFocus() }
+                    else {
+                        episodeList.scrollToItem(focusIndex.coerceIn(seasonEpisodes.indices))
+                        withFrameNanos { }; withFrameNanos { }; currentFocus.requestFocus()
+                    }
+                }
                 GlassButton(stringResource(R.string.back), Modifier.focusRequester(episodesFocus).widthIn(min = 82.dp),
                     variant = GlassButtonVariant.SECONDARY, compact = true, onClick = ::closeDrawer)
-                SeasonPicker(seasons, activeSeason, modifier = Modifier.padding(top = 14.dp)) { picked = it }
-                LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(episodes.filter { it.season == activeSeason }, key = Episode::key) { episode ->
+                SeasonPicker(seasons, activeSeason, modifier = Modifier.padding(top = 14.dp)) { picked = it; focusIndex = 0 }
+                LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(top = 8.dp), state = episodeList, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(seasonEpisodes, key = Episode::key) { episode ->
                         val viewing = state.viewing.firstOrNull { it.title.key == title?.key && it.episode?.key == episode.key && it.version == state.version }
-                        EpisodeRow(episode, viewing, state.episode?.key == episode.key) {
+                        EpisodeRow(episode, viewing, state.episode?.key == episode.key,
+                            modifier = if (seasonEpisodes.getOrNull(focusIndex)?.key == episode.key) Modifier.focusRequester(currentFocus) else Modifier) {
                             if (!vm.isAnime) drawer = null
                             vm.play(episode)
                         }
@@ -620,14 +691,38 @@ private enum class PlayerSettingsPage { ROOT, QUALITY, AUDIO, SUBTITLES, AUTOPLA
                 }
             }
         }
-        // A separate viewport also contains explicitly positioned cues above transport.
-        if (failure == null) Box(Modifier.fillMaxSize().padding(safe)) {
-            AndroidView(factory = { SubtitleView(it).apply { setUserDefaultStyle(); setUserDefaultTextSize(); setBottomPaddingFraction(0.04f) } },
-                modifier = Modifier.fillMaxSize().padding(end = if (drawer != null) drawerWidth + 16.dp else 0.dp,
-                bottom = if (showBottomArea) bottomAreaHeight + 8.dp else 0.dp),
-                update = { subtitles -> subtitles.setCues(cues) })
+        if (editorOpen) {
+            val editorHeight = maxHeight * .7f
+            GlassSurface(Modifier.align(Alignment.BottomCenter).padding(safe).fillMaxWidth().heightIn(max = maxHeight * .8f)
+                .onSizeChanged { bottomAreaHeight = with(density) { it.height.toDp() } }) {
+                RegionEditor(player, vm, segments, editingRegion, duration, Modifier.fillMaxWidth().heightIn(max = editorHeight), ::closeEditor)
+            }
         }
-        if (buffering && failure == null) GlassSurface(Modifier.align(Alignment.Center)) { Loading() }
+        if (bufferAhead) {
+            GlassSurface(Modifier.align(Alignment.BottomEnd).padding(safe).widthIn(max = 520.dp)
+                .onSizeChanged { bottomAreaHeight = with(density) { it.height.toDp() } }) {
+                val ahead = (buffered - position).coerceAtLeast(0) / 1000
+                val targetSeconds = minOf(90L, ((duration - position).coerceAtLeast(0) + 999) / 1000)
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    LaunchedEffect(Unit) { withFrameNanos { }; bufferFocus.requestFocus() }
+                    Text(stringResource(R.string.buffer_ahead), color = TextPrimary, fontSize = 24.sp)
+                    Text(stringResource(R.string.buffer_help), color = Muted, fontSize = 13.sp)
+                    Text(if (bufferComplete) pluralStringResource(R.plurals.buffer_ready, ahead.toInt(), ahead)
+                        else pluralStringResource(R.plurals.buffer_progress, targetSeconds.toInt(), ahead, targetSeconds),
+                        color = Accent, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+                    if (bufferStalled) {
+                        Text(stringResource(R.string.buffer_stalled), color = Muted)
+                        Action(stringResource(R.string.retry)) { if (player.playerError != null) player.prepare(); bufferRestart++ }
+                    }
+                    failure?.let { FailureMessage(it, { vm.refresh() }) }
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Action(stringResource(R.string.buffer_play_now), Modifier.focusRequester(bufferFocus), failure == null) { closeBuffer(true) }
+                        Action(stringResource(R.string.cancel)) { closeBuffer(bufferResume) }
+                    }
+                }
+            }
+        }
+        if (buffering && failure == null && !bufferAhead && !editorOpen) GlassSurface(Modifier.align(Alignment.Center)) { Loading() }
         state.stillWatchingSeconds?.let { WatchingPrompt(it, vm::continueWatching) { vm.back() } }
     }
     }
@@ -668,10 +763,12 @@ internal fun clock(milliseconds: Long): String {
     SegmentType.RECAP -> R.string.skip_recap
     SegmentType.CREDITS -> R.string.skip_credits
     SegmentType.POST_CREDITS -> R.string.skip_post_credits
+    SegmentType.MIXED_INTRO -> R.string.skip_mixed_intro
+    SegmentType.MIXED_CREDITS -> R.string.skip_mixed_credits
+    SegmentType.CUSTOM -> R.string.region_custom
 })
 
-private enum class TransportIcon { PLAY, PAUSE, BACKWARD, FORWARD, SETTINGS, EPISODES, EXIT }
-private const val NEXT_EPISODE_SECONDS = 5
+private enum class TransportIcon { PLAY, PAUSE, BACKWARD, FORWARD, SETTINGS, EPISODES, REGIONS, EXIT }
 
 @Composable private fun PlayerControl(label: String, icon: TransportIcon, modifier: Modifier = Modifier,
     enabled: Boolean = true, click: () -> Unit) {
@@ -706,6 +803,12 @@ private const val NEXT_EPISODE_SECONDS = 5
                         drawCircle(ink, 2.4.dp.toPx(), Offset(w * 0.19f, y))
                         drawLine(ink, Offset(w * 0.38f, y), Offset(w * 0.88f, y), 2.dp.toPx())
                     }
+                }
+                TransportIcon.REGIONS -> {
+                    drawLine(ink, Offset(w * .1f, h * .5f), Offset(w * .9f, h * .5f), 2.dp.toPx())
+                    drawRect(ink, Offset(w * .3f, h * .3f), Size(w * .4f, h * .4f), style = Stroke(2.dp.toPx()))
+                    drawLine(ink, Offset(w * .3f, h * .18f), Offset(w * .3f, h * .82f), 2.dp.toPx())
+                    drawLine(ink, Offset(w * .7f, h * .18f), Offset(w * .7f, h * .82f), 2.dp.toPx())
                 }
                 TransportIcon.EXIT -> { drawLine(ink, Offset(w * 0.15f, h * 0.5f), Offset(w * 0.85f, h * 0.5f), 2.dp.toPx())
                     drawLine(ink, Offset(w * 0.15f, h * 0.5f), Offset(w * 0.45f, h * 0.2f), 2.dp.toPx())

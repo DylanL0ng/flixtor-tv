@@ -386,18 +386,15 @@ class RemoteControlsTest {
                 select(text(R.string.option_off))
                 await("Autoplay changes and persists") { vm.state.value.profile?.autoplay == false && !ProfileStore(app).all().first().autoplay }
                 select(text(R.string.skip_segments))
-                select(text(R.string.segment_mark))
-                await("Skip controls activate") { visible(text(R.string.segment_mark_end)) }
+                select(text(R.string.edit_regions))
+                await("Region editor starts on Add") { focused()?.label == text(R.string.region_add) }
+                key(KeyEvent.KEYCODE_DPAD_CENTER)
+                await("Start handle focused") { focused()?.label?.startsWith("Start") == true }
                 capture("remote-settings-scrolled-${fit.horizontal}")
                 key(KeyEvent.KEYCODE_BACK)
-                await("Skip Back returns to its category") { focused()?.label == text(R.string.skip_segments) }
-                key(KeyEvent.KEYCODE_DPAD_CENTER)
-                focus(text(R.string.segment_mark_end))
-                await("In-progress marking survives navigation") { visible(text(R.string.segment_mark_end)) }
-                key(KeyEvent.KEYCODE_BACK)
-                key(KeyEvent.KEYCODE_BACK)
-                await("Closing Settings restores opener") { focused()?.label == text(R.string.settings) }
-                key(KeyEvent.KEYCODE_DPAD_CENTER)
+                await("Cancelling draft restores region transport") { focused()?.label == text(R.string.edit_regions) }
+                assertTrue("Cancel leaves no saved marks", vm.markedSegments().isEmpty())
+                select(text(R.string.settings), KeyEvent.KEYCODE_DPAD_RIGHT)
                 await("Reopening Settings focuses Quality") { focused()?.label?.startsWith(text(R.string.quality)) == true }
                 val before = LibraryStore(app, profile.id).viewing().firstOrNull()?.position ?: 0
                 Thread.sleep(6500)
@@ -409,18 +406,18 @@ class RemoteControlsTest {
                 key(KeyEvent.KEYCODE_BACK) // Root menu closes.
                 await("Drawer Back restores Settings") { focused()?.label == text(R.string.settings) }
                 key(KeyEvent.KEYCODE_DPAD_LEFT); key(KeyEvent.KEYCODE_DPAD_CENTER)
-                await("Episodes opens on Back") { focused()?.label == text(R.string.back) }
+                await("Episodes opens on current episode") { focused()?.label?.contains(episodes.first().name) == true }
                 repeat(4) { key(KeyEvent.KEYCODE_DPAD_LEFT) }
-                assertEquals(text(R.string.back), focused()?.label)
+                assertTrue("Focus stays inside episode drawer", focused()?.label?.contains(episodes.first().name) == true)
                 capture("remote-episodes-${fit.horizontal}")
-                select(text(R.string.season_options))
+                select(text(R.string.season_options), KeyEvent.KEYCODE_DPAD_UP)
                 select(target.getString(R.string.season, 2))
-                await("Season selection restores season row") { focused()?.label == "${text(R.string.season_options)} · ${target.getString(R.string.season, 2)}" }
+                await("Season selection focuses first episode") { focused()?.label?.contains(episodes.first { it.season == 2 }.name) == true }
                 assertEquals("Season picking keeps current episode playing", 1, vm.state.value.episode?.season)
                 key(KeyEvent.KEYCODE_BACK)
                 await("Episodes restores opener") { focused()?.label == text(R.string.episodes) }
                 key(KeyEvent.KEYCODE_DPAD_CENTER)
-                await("Episodes reopens") { focused()?.label == text(R.string.back) }
+                await("Episodes reopens on current episode") { focused()?.label?.contains(episodes.first().name) == true }
                 select(text(R.string.settings)) // Footer switch, not transport.
                 await("Episodes switches to Settings without losing focus") {
                     focused()?.label?.startsWith(text(R.string.quality)) == true

@@ -63,10 +63,11 @@ class IntroDbTest {
         val segments = IntroDbClient.parseSegments(introAndOutro, "tt0944947")
         assertNull(segments.at(0))
         assertEquals(SegmentType.INTRO, segments.at(437000)?.type)
-        // The final millisecond still belongs to the segment; the next one does not.
-        assertEquals(SegmentType.INTRO, segments.at(531000)?.type)
+        // End is exclusive: seeking to the finish cannot re-trigger a skip.
+        assertEquals(SegmentType.INTRO, segments.at(530999)?.type)
+        assertNull(segments.at(531000))
         assertNull(segments.at(531001))
-        assertEquals(SegmentType.CREDITS, segments.at(3699500)?.type)
+        assertNull(segments.at(3699500))
         assertNull(segments.at(4000000))
     }
 

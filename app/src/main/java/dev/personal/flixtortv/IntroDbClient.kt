@@ -68,7 +68,7 @@ class IntroDbClient(private val http: OkHttpClient = defaultHttp()) {
          */
         fun parseSegments(raw: String, imdbId: String): Segments {
             val json = runCatching { JSONObject(raw) }.getOrElse { return Segments(imdbId) }
-            val items = SegmentType.entries.mapNotNull { type ->
+            val items = SegmentType.entries.filter { it.contributable }.mapNotNull { type ->
                 val segment = json.optJSONObject(type.read) ?: return@mapNotNull null
                 val start = segment.millis("start_ms") ?: segment.seconds("start_sec")
                 val end = segment.millis("end_ms") ?: segment.seconds("end_sec")
@@ -83,14 +83,14 @@ class IntroDbClient(private val http: OkHttpClient = defaultHttp()) {
         private fun JSONObject.millis(key: String): Long? {
             if (!has(key) || isNull(key)) return null
             val value = optDouble(key, -1.0)
-            return if (value > 0 && value % 1.0 == 0.0) value.toLong() else null
+            return if (value.isFinite() && value >= 0 && value % 1.0 == 0.0) value.toLong() else null
         }
 
         /** A non-negative seconds field converted to milliseconds, or null when absent. */
         private fun JSONObject.seconds(key: String): Long? {
             if (!has(key) || isNull(key)) return null
             val value = optDouble(key, -1.0)
-            return if (value >= 0) (value * 1000).toLong() else null
+            return if (value.isFinite() && value >= 0) (value * 1000).toLong() else null
         }
 
         /** Builds a submission body. Timestamps are seconds, matching the documented form. */

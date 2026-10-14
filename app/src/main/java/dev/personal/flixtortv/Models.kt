@@ -31,7 +31,8 @@ data class Detail(val title: Title, val episodes: List<Episode>) {
 data class Caption(val uri: String, val label: String, val mime: String, val default: Boolean)
 data class Stream(val uri: String, val captions: List<Caption>,
     val headers: Map<String, String> = mapOf("Referer" to SiteParser.BASE + "/"),
-    val mime: String = "application/x-mpegURL")
+    val mime: String = "application/x-mpegURL", val animeMapping: AnimeMapping? = null)
+data class AnimeMapping(val malId: Int, val episode: Double)
 data class PairCode(val code: String, val url: String)
 enum class AccountStatus { CHECKING, GUEST, SIGNED_IN, VIP, EXPIRED, UNAVAILABLE }
 data class Account(val status: AccountStatus) {
@@ -51,7 +52,7 @@ enum class Failure { NETWORK, ACCESS, VIP, EXPIRED, BLOCKED, CHANGED, MEDIA, SIG
 class SiteException(val failure: Failure) : Exception(failure.name)
 
 data class Profile(val id: String, val name: String, val avatar: Int = 0, val quality: Int = 0,
-    val autoplay: Boolean = true, val pin: String = "") {
+    val autoplay: Boolean = true, val pin: String = "", val largerBuffer: Boolean = false) {
     /** A PIN protects selection; the stored value is a digest, never the digits. */
     val locked get() = pin.isNotEmpty()
 }
@@ -64,14 +65,29 @@ enum class SegmentType(val read: String, val submit: String) {
     INTRO("intro", "intro"),
     RECAP("recap", "recap"),
     CREDITS("outro", "outro"),
-    POST_CREDITS("post_credits", "post-credits")
+    POST_CREDITS("post_credits", "post-credits"),
+    MIXED_INTRO("mixed-op", "mixed-op"), MIXED_CREDITS("mixed-ed", "mixed-ed"),
+    CUSTOM("custom", "custom");
+    val contributable get() = this in listOf(INTRO, RECAP, CREDITS, POST_CREDITS)
 }
 
-data class SkipSegment(val type: SegmentType, val startMs: Long, val endMs: Long) {
+enum class SkipAction { ASK, AUTO, OFF }
+enum class SegmentSource { INTRODB, ANISKIP, LOCAL }
+data class CustomSegmentType(val id: String, val label: String)
+
+data class SkipSegment(val type: SegmentType, val startMs: Long, val endMs: Long,
+    val id: String = "${type.read}:$startMs:$endMs", val typeId: String = type.read,
+    val action: SkipAction? = null, val source: SegmentSource = SegmentSource.INTRODB) {
     init { require(startMs >= 0 && endMs > startMs) { "A segment must end after it starts" } }
     val durationMs get() = endMs - startMs
-    fun contains(positionMs: Long) = positionMs in startMs..endMs
+    fun contains(positionMs: Long) = positionMs >= startMs && positionMs < endMs
 }
+
+internal fun mergeSegments(remote: List<SkipSegment>, local: List<SkipSegment>): List<SkipSegment> =
+    (remote.filterNot { candidate -> local.any { it.typeId == candidate.typeId } } + local).sortedBy { it.startMs }
+
+internal fun effectiveSkipAction(region: SkipSegment, show: SkipAction?, profile: SkipAction?): SkipAction =
+    region.action ?: show ?: profile ?: SkipAction.ASK
 
 /**
  * Every known segment for one episode or film. A media item with no data is empty,

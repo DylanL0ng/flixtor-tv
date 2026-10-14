@@ -23,7 +23,7 @@ import androidx.tv.material3.Text
 import com.google.zxing.MultiFormatWriter
 import com.google.zxing.BarcodeFormat
 
-private enum class SettingsPage { ROOT, ACCOUNT, PROFILES, PLAYBACK, QUALITY, AUTOPLAY, SKIP, UPDATES, DISPLAY, LIBRARY }
+private enum class SettingsPage { ROOT, ACCOUNT, PROFILES, PLAYBACK, QUALITY, AUTOPLAY, BUFFER, SKIP, UPDATES, DISPLAY, LIBRARY }
 
 @Composable internal fun AccountScreen(s: TvState, vm: TvViewModel, fitFocus: FocusRequester,
     contentFocus: FocusRequester, onContentFocusChanged: (Boolean) -> Unit,
@@ -59,6 +59,7 @@ private enum class SettingsPage { ROOT, ACCOUNT, PROFILES, PLAYBACK, QUALITY, AU
         SettingsPage.PLAYBACK to stringResource(R.string.playback_settings),
         SettingsPage.QUALITY to stringResource(R.string.quality),
         SettingsPage.AUTOPLAY to stringResource(R.string.autoplay_next),
+        SettingsPage.BUFFER to stringResource(R.string.buffering_mode),
         SettingsPage.SKIP to stringResource(R.string.skip_segments),
         SettingsPage.UPDATES to stringResource(R.string.updates),
         SettingsPage.DISPLAY to stringResource(R.string.display),
@@ -79,7 +80,7 @@ private enum class SettingsPage { ROOT, ACCOUNT, PROFILES, PLAYBACK, QUALITY, AU
         when {
             confirmClear -> confirmClear = false
             passwordLogin -> { passwordLogin = false; password = "" }
-            page == SettingsPage.QUALITY || page == SettingsPage.AUTOPLAY -> page = SettingsPage.PLAYBACK
+            page in listOf(SettingsPage.QUALITY, SettingsPage.AUTOPLAY, SettingsPage.BUFFER) -> page = SettingsPage.PLAYBACK
             else -> {
                 if (page == SettingsPage.ACCOUNT) vm.stopPairing()
                 page = SettingsPage.ROOT
@@ -103,7 +104,7 @@ private enum class SettingsPage { ROOT, ACCOUNT, PROFILES, PLAYBACK, QUALITY, AU
             returning = false
         } else if (page == SettingsPage.PLAYBACK) {
             withFrameNanos { }; optionFocus.requestFocus()
-        } else if (!restoringFromFit && page !in listOf(SettingsPage.ROOT, SettingsPage.PROFILES, SettingsPage.QUALITY, SettingsPage.AUTOPLAY)) {
+        } else if (!restoringFromFit && page !in listOf(SettingsPage.ROOT, SettingsPage.PROFILES, SettingsPage.QUALITY, SettingsPage.AUTOPLAY, SettingsPage.BUFFER)) {
             withFrameNanos { }; contentFocus.requestFocus()
         }
     }
@@ -145,11 +146,19 @@ private enum class SettingsPage { ROOT, ACCOUNT, PROFILES, PLAYBACK, QUALITY, AU
                         vm.setAutoplay(it); page = SettingsPage.PLAYBACK
                     }
                 }
+                SettingsPage.BUFFER -> {
+                    Text(stringResource(R.string.buffer_help), color = TextSecondary)
+                    ChoiceList(bufferChoices(), s.profile?.largerBuffer == true, Modifier.weight(1f).fillMaxWidth(.88f)) {
+                        vm.setBuffering(it); page = SettingsPage.PLAYBACK
+                    }
+                }
                 SettingsPage.PLAYBACK -> {
                     MenuRow(stringResource(R.string.quality), value = qualities.firstOrNull { it.value == quality }?.label,
                         modifier = if (playbackOrigin == SettingsPage.QUALITY) Modifier.focusRequester(optionFocus) else Modifier) { open(SettingsPage.QUALITY) }
                     MenuRow(stringResource(R.string.autoplay_next), value = autoplayOptions.first { it.value == autoplay }.label,
                         modifier = if (playbackOrigin == SettingsPage.AUTOPLAY) Modifier.focusRequester(optionFocus) else Modifier) { open(SettingsPage.AUTOPLAY) }
+                    MenuRow(stringResource(R.string.buffering_mode), value = bufferChoices().first { it.value == (s.profile?.largerBuffer == true) }.label,
+                        modifier = if (playbackOrigin == SettingsPage.BUFFER) Modifier.focusRequester(optionFocus) else Modifier) { open(SettingsPage.BUFFER) }
                 }
                 else -> LazyColumn(Modifier.weight(1f).fillMaxWidth(.88f), contentPadding = PaddingValues(bottom = 24.dp),
                     verticalArrangement = Arrangement.spacedBy(18.dp)) {
@@ -188,9 +197,12 @@ private enum class SettingsPage { ROOT, ACCOUNT, PROFILES, PLAYBACK, QUALITY, AU
                             }
                         }
                         SettingsPage.SKIP -> item {
-                            Text(stringResource(R.string.introdb_key_help), color = TextSecondary)
-                            Text(stringResource(if (introDbConfigured) R.string.introdb_key_stored else R.string.introdb_key_unavailable),
-                                color = if (introDbConfigured) Accent else Muted, modifier = Modifier.padding(top = 8.dp))
+                            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                SkipPreferences(vm, false, s.skipRevision)
+                                Text(stringResource(R.string.introdb_key_help), color = TextSecondary)
+                                Text(stringResource(if (introDbConfigured) R.string.introdb_key_stored else R.string.introdb_key_unavailable),
+                                    color = if (introDbConfigured) Accent else Muted)
+                            }
                         }
                         SettingsPage.UPDATES -> item { UpdateSettings(vm) }
                         SettingsPage.DISPLAY -> item {

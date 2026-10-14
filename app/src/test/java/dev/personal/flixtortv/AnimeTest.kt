@@ -62,6 +62,7 @@ class AnimeTest {
     @Test fun streamPreservesHeaderAndCaptionRequirements() {
         val stream = AnimeParser.stream(embed(), "https://embed.example/mal/20/1/dub")
         assertEquals("https://embed.example/", stream.headers["Referer"])
+        assertEquals(AnimeMapping(20, 1.0), stream.animeMapping)
         assertTrue(stream.uri.endsWith("token=fixture"))
         assertEquals("application/x-mpegURL", stream.mime)
         assertEquals("https://embed.example/english.vtt", stream.captions.single().uri)

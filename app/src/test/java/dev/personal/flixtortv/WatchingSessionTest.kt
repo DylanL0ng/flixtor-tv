@@ -35,6 +35,22 @@ class WatchingSessionTest {
         session.complete(token, episode = true)
         assertTrue(session.requireConfirmation(token))
     }
+    @Test fun creditsCanAdvanceWithoutInventingCompletionAndDeferAttendanceUntilEnd() {
+        episode(30)
+        val second = session.start(automatic = true)
+        session.playback(second, true, true); time += 30 * minute
+        assertFalse(session.confirmationDueAtCredits(second))
+        assertFalse(session.finished)
+        session.complete(second, true)
+        val third = session.start(automatic = true)
+        session.playback(third, true, true); time += 30 * minute
+        assertTrue(session.confirmationDueAtCredits(third))
+        assertFalse(session.finished)
+        assertFalse(session.pending)
+        session.complete(third, true)
+        assertTrue(session.requireConfirmation(third))
+        assertTrue(session.confirmationDueAtCredits(second))
+    }
 
     @Test fun interactionResetsTimeAndEpisodeCount() {
         episode(30); episode(30)

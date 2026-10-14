@@ -68,6 +68,13 @@ internal class WatchingSession(
         return pending
     }
 
+    /** Credits may advance early, unless this completion would require attendance. */
+    fun confirmationDueAtCredits(token: Long): Boolean {
+        if (token != this.token || pending) return true
+        settle()
+        return episodes + (if (finished) 0 else 1) >= minimumEpisodes && watchedMs >= minimumWatchMs
+    }
+
     val responseSeconds: Int?
         get() {
             settle()

@@ -19,7 +19,7 @@ internal object ProfilePin {
 class ProfileStore(private val context: Context) {
     private val prefs = context.getSharedPreferences("profiles", Context.MODE_PRIVATE)
     private fun profile(value: JSONObject) = Profile(value.getString("id"), value.getString("name"),
-        value.optInt("avatar"), value.optInt("quality"), value.optBoolean("autoplay", true), value.optString("pin"))
+        value.optInt("avatar"), value.optInt("quality"), value.optBoolean("autoplay", true), value.optString("pin"), value.optBoolean("largerBuffer"))
     fun all(): List<Profile> = try {
         val array = JSONArray(prefs.getString("items", "[]"))
         (0 until array.length()).map { array.getJSONObject(it) }.map(::profile)
@@ -39,7 +39,7 @@ class ProfileStore(private val context: Context) {
     private fun write(profiles: List<Profile>) {
         check(prefs.edit().putString("items", JSONArray(profiles.map {
             JSONObject().put("id", it.id).put("name", it.name).put("avatar", it.avatar).put("quality", it.quality)
-                .put("autoplay", it.autoplay).put("pin", it.pin)
+                .put("autoplay", it.autoplay).put("pin", it.pin).put("largerBuffer", it.largerBuffer)
         }).toString()).commit())
     }
     fun save(id: String?, name: String, avatar: Int): List<Profile> {
@@ -58,6 +58,10 @@ class ProfileStore(private val context: Context) {
     }
     fun autoplay(id: String, enabled: Boolean): List<Profile> {
         write(all().map { if (it.id == id) it.copy(autoplay = enabled) else it })
+        return all()
+    }
+    fun buffering(id: String, larger: Boolean): List<Profile> {
+        write(all().map { if (it.id == id) it.copy(largerBuffer = larger) else it })
         return all()
     }
     /** A blank pin removes an existing lock. Returns the stored list. */
@@ -80,6 +84,7 @@ class ProfileStore(private val context: Context) {
         require(profiles.size > 1 && profiles.any { it.id == id })
         write(profiles.filterNot { it.id == id })
         context.getSharedPreferences("library_$id", Context.MODE_PRIVATE).edit().clear().commit()
+        SkipStore(context).clearProfile(id)
         return all()
     }
 }

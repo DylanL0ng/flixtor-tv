@@ -181,6 +181,7 @@ internal object AnimeParser {
         }.orEmpty()
         val referer = embed.toHttpUrl().newBuilder().encodedPath("/").query(null).fragment(null).build().toString()
         return Stream(uri, captions, mapOf("Referer" to referer, "User-Agent" to FlixtorClient.USER_AGENT),
-            if (uri.toHttpUrl().encodedPath.endsWith(".mp4", true)) "video/mp4" else "application/x-mpegURL")
+            if (uri.toHttpUrl().encodedPath.endsWith(".mp4", true)) "video/mp4" else "application/x-mpegURL",
+            AniSkipClient.mapping(embed))
     }
 }
