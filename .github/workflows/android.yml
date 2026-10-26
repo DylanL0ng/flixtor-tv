@@ -38,7 +38,7 @@ jobs:
           fi
       - uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 29
+          api-level: 34
           arch: x86_64
           target: google_apis
           script: ./android/gradlew -p android :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=dev.personal.flixtortv.SolidTvIntegrationTest --console=plain
