@@ -49,18 +49,7 @@ for (const viewport of [{ width: 1920, height: 1080 }, { width: 1280, height: 72
     async function click(name: string | RegExp) {
       const button = page.getByRole('button', { name }).first();
       await expect(button).toBeAttached();
-      await expect.poll(async () => {
-        const b1 = await button.boundingBox();
-        await new Promise(r => setTimeout(r, 60));
-        const b2 = await button.boundingBox();
-        return b1 && b2 && b1.width > 0 && Math.abs(b1.x - b2.x) < 2 && Math.abs(b1.y - b2.y) < 2;
-      }).toBe(true);
-      const box = (await button.boundingBox())!;
-      const point = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
-      const el = await page.evaluate(p => document.elementFromPoint(p.x, p.y)?.outerHTML?.slice(0, 80), point);
-      console.log('CLICKING:', name, 'point:', point, 'element:', el);
-      await page.mouse.move(point.x, point.y);
-      await page.mouse.click(point.x, point.y);
+      await button.click();
     }
     await click('My profile'); await expect(page).toHaveURL(/home/);
     await click('The Test Series'); await expect(page).toHaveURL(/detail/);
