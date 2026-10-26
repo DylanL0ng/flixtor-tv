@@ -71,6 +71,13 @@ export function CatalogShelves(props: {
       const focusId = (title: ShelfTitle) => `${props.prefix}:${id}:${shelfTitleKey(title)}`;
       const saved = untrack(() => props.origin?.positions?.[id] || (props.origin?.shelf === id ? { title: props.origin.title || '', item: props.origin.item } : undefined));
       let focusedKey = saved?.title;
+      let recovering = false;
+      const horizontalBoundary = (direction: number) => {
+        const node = nodes.get(id), active = activeElement();
+        if (node && active?.parent === node) node.selected = node.children.indexOf(active);
+        const index = shelf().titles.findIndex(title => shelfTitleKey(title) === focusedKey);
+        return index + direction < 0 || index + direction >= shelf().titles.length;
+      };
       const initial = () => {
         const found = shelf().titles.findIndex(t => shelfTitleKey(t) === focusedKey);
         return found >= 0 ? found : Math.min(saved?.item || 0, Math.max(0, shelf().titles.length - 1));
@@ -112,16 +119,17 @@ export function CatalogShelves(props: {
               displaySize={shelf().continuing ? 4 : 6} bufferSize={2} scroll={entering() === id ? 'none' : 'edge'} wrap={false}
               ref={node => { nodes.set(id, node as NavigableElement); onCleanup(() => nodes.delete(id)); }}
               onUp={() => move(id, -1)} onDown={() => move(id, 1)}
-              onLeft={() => (nodes.get(id)?.cursor ?? 0) === 0}
-              onRight={() => Number(nodes.get(id)?.cursor ?? 0) >= shelf().titles.length - 1} selected={untrack(initial)}>
+              onLeft={() => horizontalBoundary(-1)}
+              onRight={() => horizontalBoundary(1)} selected={untrack(initial)}>
               {title => {
                 // VirtualRow indexes describe its mounted window, not the full shelf.
                 const index = () => shelf().titles.findIndex(item => shelfTitleKey(item) === shelfTitleKey(title()));
                 return <Poster title={title()} width={shelf().continuing ? 400 : 260} landscape={shelf().continuing}
                 viewing={!isDiscovery(title()) ? resumeViewing(props.viewing, title() as Title) : undefined}
-                id={focusId(title())} autofocus={props.origin ? props.origin.shelf === id && initial() === index() : !!props.autofocus && rail() === 0 && index() === 0}
+                id={focusId(title())} autofocus={recovering && index() === 0 || (props.origin ? props.origin.shelf === id && initial() === index() : !!props.autofocus && rail() === 0 && index() === 0)}
                 action={() => props.open(title(), focusId(title()))}
                 onFocus={node => {
+                  recovering = false;
                   focusedKey = shelfTitleKey(title());
                   if (!entering()) { const rect = nodeRect(node, false); preferredX = rect.x + rect.width / 2; }
                   props.focus(id, title(), index(), rail(), focusId(title()));
@@ -133,7 +141,7 @@ export function CatalogShelves(props: {
         </Show>
         <Show when={shelf().error}><Row width={1728} height={86} gap={24}>
           <Status width={1100} message={failureMessages[failureOf(shelf().error)]} error />
-          <Button label={`Retry ${shelf().label}`} autofocus={!shelf().titles.length && rail() === 0} action={() => shelf().retry?.()} />
+          <Button label={`Retry ${shelf().label}`} autofocus={!shelf().titles.length && rail() === 0} action={() => { recovering = !shelf().titles.length; shelf().retry?.(); }} />
         </Row></Show>
       </Column>;
     }}</For>

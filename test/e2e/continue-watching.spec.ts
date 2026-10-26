@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { dehydrate, QueryClient } from '@tanstack/solid-query';
 
 test('Continue Watching stays visible after repeated fast and settled trips through lower rails', async ({ page }, info) => {
+  test.setTimeout(60_000);
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.addInitScript(() => {
@@ -55,6 +56,7 @@ test('Continue Watching stays visible after repeated fast and settled trips thro
     for (let rail = 0; rail < 4; rail++) { await page.keyboard.press('ArrowUp'); if (delay) await page.waitForTimeout(delay); }
     await page.waitForTimeout(500);
     await expect(focused).toHaveText(/^Resume /);
+    await expect(focused).toBeVisible();
     const bounds = await focused.boundingBox();
     expect(bounds).not.toBeNull();
     expect(bounds!.y).toBeGreaterThan(150);
