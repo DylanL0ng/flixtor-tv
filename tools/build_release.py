@@ -34,6 +34,9 @@ if not Path(values["TV_KEYSTORE"]).exists():
                     "-keyalg", "RSA", "-keysize", "3072", "-validity", "10000",
                     "-dname", "CN=Personal TV, OU=Personal, O=Personal, C=IE"], env=env, check=True)
     os.chmod(values["TV_KEYSTORE"], 0o600)
-subprocess.run([str(root / "gradlew"), ":app:assembleRelease", "--console=plain"], cwd=root, env=env, check=True)
-print("Signed APK: app/build/outputs/apk/release/app-release.apk")
+subprocess.run([str(root / "android/gradlew"), ":app:assembleRelease", "--console=plain"], cwd=root / "android", env=env, check=True)
+apk = root / "android/app/build/outputs/apk/release/app-release.apk"
+import hashlib
+apk.with_suffix(".apk.sha256").write_text(hashlib.sha256(apk.read_bytes()).hexdigest() + "  app-release.apk\n")
+print("Signed APK: android/app/build/outputs/apk/release/app-release.apk")
 print("Signing material: ~/.local/share/flixtor-tv/ — back up securely for future updates.")

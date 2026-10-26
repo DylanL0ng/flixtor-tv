@@ -1,0 +1,37 @@
+{
+  "name": "flixtor-tv",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "vite --host 127.0.0.1",
+    "start:fixtures": "vite --host 127.0.0.1 --mode fixtures",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "apk": "python3 tools/build_release.py"
+  },
+  "dependencies": {
+    "@solidjs/router": "0.16.1",
+    "@solidtv/renderer": "2.0.7",
+    "@solidtv/solid": "1.7.1",
+    "@tanstack/solid-query": "^5.90.0",
+    "css-select": "^6.0.0",
+    "domutils": "^3.2.2",
+    "hls.js": "^1.7.3",
+    "htmlparser2": "^10.0.0",
+    "qrcode": "^1.5.4",
+    "solid-js": "1.9.17"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.57.0",
+    "@types/node": "^22.0.0",
+    "@types/qrcode": "^1.5.6",
+    "tough-cookie": "^6.0.2",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.5",
+    "vite-plugin-solid": "^2.11.14",
+    "vitest": "^5.0.5"
+  }
+}

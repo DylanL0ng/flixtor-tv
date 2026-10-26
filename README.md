@@ -1,5 +1,13 @@
 # Personal FlixTor TV client
 
+## Live browser mode
+
+Run `npm ci` then `npm start`, and open the displayed loopback URL. Browser development now uses live catalogue, account, pairing, artwork and stream requests through a local Vite bridge, with real HTML video/HLS playback. `npm run start:fixtures` explicitly selects the separate offline demo used by UI tests. Demo profiles/history and live browser storage are isolated.
+
+Sign in under Settings → Account. Browser service cookies stay in the local server's memory, isolated per browser session; they survive page reloads but require signing in again after restarting the server. Android continues using its encrypted native session. Server-side VIP, capacity and access restrictions still apply; live mode never substitutes fixture data when a request fails.
+
+`npm run typecheck`, `npm test`, `npm run build`, and `npm run test:e2e` cover live transport, cookie isolation/sign-out, media URL rewriting, real browser video playback, and the explicit fixture test mode. The production Android bundle excludes both browser adapters and fixture payloads.
+
 Native Kotlin / Compose for TV app. Sky-inspired blue glass surfaces, seven household profiles with optional PINs, catalogue/search, seasons, phone QR pairing, email/password sign-in, profile-specific My List and Continue Watching, autoplay of the next episode, IntroDB skip segments with manual marking and contribution, an in-player episode list with watched progress, and Media3 HLS playback with custom remote controls. No WebView.
 
 Targets ONN **Android/Google TV** devices and Chromecast **with Google TV** on Android 10+. ONN Roku TVs and classic cast-only Chromecast devices cannot run this APK. Sky IP061 (Sky Stream) has no supported APK sideloading path.
@@ -56,13 +64,15 @@ This keeps the AVD's app data. Software rendering is a diagnostic workaround, no
 
 Account → Sign in using your phone displays the service's pairing QR. Scan on your phone, sign into the website and approve the TV. The app polls for up to three minutes. Pairing stops on leaving the screen or backgrounding. Email/password fallback submits directly to `https://flixtor.to`; passwords are never persisted. Session cookies are encrypted with an Android Keystore key, scoped by domain/path/expiry, and excluded from backup. Session cookies without server expiry are retained for at most 30 days. Sign out clears the app's local session.
 
-All access and VIP decisions remain on the server. Session expiry or media authorization errors require signing in or retrying for a fresh stream. Network/VPN IP changes can invalidate a stream. Captions and resolution depend on the returned stream and the device decoder. No 4K/HDR guarantee. The app pauses in the background; use Play to resume on return.
+All access and VIP decisions remain on the server. Before showing a FlixTor stream-loading or player error, the app silently refreshes account status and resolves a fresh stream once per playback start. Recovery keeps the selected episode, current position, pause intent and still-watching attendance. A second failure shows the existing retry/sign-in controls; explicit Retry and the next episode each allow another recovery attempt. HiAnime does not use the FlixTor account fallback. Network/VPN IP changes can invalidate a stream. Captions and resolution depend on the returned stream and the device decoder. No 4K/HDR guarantee. The app pauses in the background; use Play to resume on return.
 
 Cold launch asks who's watching. Add, rename, choose an avatar, switch, or delete profiles from Profiles. Up to seven profiles share one encrypted service session. Optional four digit PINs protect individual profiles; Manage → Edit sets, changes, or removes one, and the digits are stored only as a salted SHA-256 digest scoped to the profile. A locked profile shows PIN protected and opens a remote keypad instead of the profile. Existing library data migrates once to the default profile. My List (up to 200 titles) and viewing history (up to 100 entries) stay separate per profile. Deletion removes only that profile's library; sign-out affects the shared login. Website Sync Codes are not integrated. Image cache is bounded to 24 MB memory and 80 MB disk. Browse/search load automatically within two rows of the end. Pages are stored on disk for the active query, with up to eight decoded pages retained in memory. Stable title keys preserve focus; query/filter changes reset the grid, while returning from details restores its position. Pagination failures keep loaded titles and offer Retry.
 
 Back on Home or the profile chooser asks for confirmation. Stay is focused by default; Back dismisses the dialog. Back inside profile management/editing and playback closes the current layer first. Exit app closes the task while retaining profiles, the encrypted session and saved viewing progress. Automatic installation waits while the exit dialog or screen-fit editor is open.
 
 Settings offers Refresh account status. Sign-in is confirmed on `/home`; signed-in accounts then check `/account` for the service's entitlement badge. Only confirmed entitlement shows VIP active. Otherwise Signed in remains distinct, with an explanation and refresh recovery.
+
+`PlaybackRecoveryTest` uses isolated storage, service fixtures and intercepted offline HLS to check silent recovery, the shared retry limit, autoplay/movies/guest access, cancellation, attendance, identical stream URLs and paused/background playback. Run on a disposable QA emulator with `./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=dev.personal.flixtortv.PlaybackRecoveryTest`. These checks do not establish sustained playback on physical TV hardware.
 
 Settings → Display → Screen fit adjusts device-wide horizontal and vertical safe margins from 0–10%, defaulting to 5%. Preview changes apply only after Save; Cancel/Back discards them. Background artwork and video stay full-screen. Captions and controls remain within safe margins.
 

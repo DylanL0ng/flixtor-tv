@@ -1,0 +1,10 @@
+import { parseDocument } from 'htmlparser2';
+import { selectAll, selectOne } from 'css-select';
+import { textContent } from 'domutils';
+import type { AnyNode, Element } from 'domhandler';
+export const document = (html: string) => parseDocument(html);
+export const all = (node: AnyNode, selector: string) => selectAll<AnyNode, Element>(selector, node);
+export const one = (node: AnyNode, selector: string) => selectOne<AnyNode, Element>(selector, node);
+export const text = (node?: AnyNode | null) => node ? textContent(node).replace(/\s+/g, ' ').trim() : '';
+export const attr = (node: Element | null | undefined, name: string) => node?.attribs[name] ?? '';
+export const unique = <T>(values: T[], key: (value: T) => string) => [...new Map(values.map(v => [key(v), v])).values()];

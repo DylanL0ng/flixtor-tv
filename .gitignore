@@ -12,3 +12,7 @@ node_modules/
 .impeccable/review/
 release.json
 captures/
+dist/
+test-results/
+playwright-report/
+.impeccable/mocks/
