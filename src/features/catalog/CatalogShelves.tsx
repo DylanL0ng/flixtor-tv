@@ -89,7 +89,13 @@ export function CatalogShelves(props: {
         const index = retained >= 0 ? retained : Math.min(Number(node.cursor ?? 0), Math.max(0, titles.length - 1));
         const ownsFocus = activeElement()?.parent === node;
         if (ownsFocus || Number(node.cursor) !== index) queueMicrotask(() => {
-          if (nodes.get(id) === node && node.rendered && titles.length) node.scrollToIndex?.(index, { noFocus: !ownsFocus });
+          if (nodes.get(id) !== node || !node.rendered || !titles.length) return;
+          const active = activeElement();
+          if (Number(node.cursor) === index && active?.parent === node) {
+            // Appending changes VirtualRow's window without moving the focused node.
+            // Align its local selection so the next arrow advances exactly one item.
+            node.selected = node.children.indexOf(active);
+          } else node.scrollToIndex?.(index, { noFocus: !ownsFocus });
         });
       }, { defer: true }));
       return <Column width={1728} height={(shelf().continuing ? 320 : 480) + 72 + (shelf().error ? 110 : 0)} gap={24} scroll="none"
@@ -107,8 +113,11 @@ export function CatalogShelves(props: {
               ref={node => { nodes.set(id, node as NavigableElement); onCleanup(() => nodes.delete(id)); }}
               onUp={() => move(id, -1)} onDown={() => move(id, 1)}
               onLeft={() => (nodes.get(id)?.cursor ?? 0) === 0}
-              onRight={() => Number(nodes.get(id)?.cursor ?? 0) >= shelf().titles.length - 1} selected={initial()}>
-              {(title, index) => <Poster title={title()} width={shelf().continuing ? 400 : 260} landscape={shelf().continuing}
+              onRight={() => Number(nodes.get(id)?.cursor ?? 0) >= shelf().titles.length - 1} selected={untrack(initial)}>
+              {title => {
+                // VirtualRow indexes describe its mounted window, not the full shelf.
+                const index = () => shelf().titles.findIndex(item => shelfTitleKey(item) === shelfTitleKey(title()));
+                return <Poster title={title()} width={shelf().continuing ? 400 : 260} landscape={shelf().continuing}
                 viewing={!isDiscovery(title()) ? resumeViewing(props.viewing, title() as Title) : undefined}
                 id={focusId(title())} autofocus={props.origin ? props.origin.shelf === id && initial() === index() : !!props.autofocus && rail() === 0 && index() === 0}
                 action={() => props.open(title(), focusId(title()))}
@@ -117,7 +126,8 @@ export function CatalogShelves(props: {
                   if (!entering()) { const rect = nodeRect(node, false); preferredX = rect.x + rect.width / 2; }
                   props.focus(id, title(), index(), rail(), focusId(title()));
                   if (!shelf().continuing && index() >= shelf().titles.length - 4) shelf().end?.();
-                }} />}
+                }} />;
+              }}
             </VirtualRow>
           </MaskedViewport>
         </Show>
