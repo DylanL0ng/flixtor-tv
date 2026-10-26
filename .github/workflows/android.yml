@@ -28,6 +28,14 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
       - run: ./android/gradlew -p android :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --console=plain
+      - name: Enable KVM hardware acceleration for Android Emulator
+        run: |
+          if [ -c /dev/kvm ]; then
+            sudo chmod 666 /dev/kvm
+            echo "KVM acceleration enabled"
+          else
+            echo "KVM device not available; emulator will use software acceleration"
+          fi
       - uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 29
