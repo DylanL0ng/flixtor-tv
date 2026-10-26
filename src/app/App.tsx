@@ -1,5 +1,5 @@
 import { Match, onCleanup, onMount, Show, Switch, Suspense, lazy, createSignal, createEffect, type ParentProps } from 'solid-js';
-import { QueryClientProvider, createQuery } from '@tanstack/solid-query';
+import { QueryClientProvider, QueryClient, createQuery } from '@tanstack/solid-query';
 import { Route, useLocation, useNavigate } from '@solidjs/router';
 import { Column, Row, useFocusManager } from '@solidtv/solid/primitives';
 import { HashRouter } from '@solidtv/solid/primitives/router';
@@ -21,8 +21,8 @@ const Settings = lazy(() => import('../features/settings/Settings').then(module 
 const Pairing = lazy(() => import('../features/account/Pairing').then(module => ({ default: module.Pairing })));
 const PlayerPage = lazy(() => import('../features/playback/Player').then(module => ({ default: module.PlayerPage })));
 
-export function AppRoot(props: { platform: Platform; host: HostInfo; repo: Repository }) {
-  const app = createApp(props.platform, props.host, props.repo);
+export function AppRoot(props: { platform: Platform; host: HostInfo; repo: Repository; queries: QueryClient }) {
+  const app = createApp(props.platform, props.host, props.repo, props.queries);
   return <AppContext.Provider value={app}><QueryClientProvider client={app.queries}>
     <HashRouter root={Shell}><Route path="/*all" component={Page} /></HashRouter>
   </QueryClientProvider></AppContext.Provider>;
@@ -90,7 +90,7 @@ function Shell(props: ParentProps) {
   onMount(() => { if (app.host.platform === 'android') void app.updates.check(); });
   createEffect(() => { if (app.notice()) announce(app.notice()); });
   const scale = () => Math.min((1920 * (1 - 2 * app.data.fit.horizontal / 100)) / 1728, (1080 * (1 - 2 * app.data.fit.vertical / 100)) / 972);
-  const nav = [['home', 'Home', 145], ['movies', 'Movies', 155], ['shows', 'TV shows', 180], ['anime', 'Anime', 145], ['list', 'My List', 155], ['search', 'Search', 170]] as const;
+  const nav = [['home', 'Home', 145, 'home'], ['movies', 'Movies', 155, 'film'], ['shows', 'TV shows', 180, 'tv'], ['anime', 'Anime', 145, 'anime'], ['list', 'My List', 155, 'list'], ['search', 'Search', 170, 'search']] as const;
   return <view width={1920} height={1080}>
     <Show when={!isPlayer()}><Backdrop url={profiles() ? undefined : app.stage()?.backdrop || app.stage()?.poster} poster={!app.stage()?.backdrop} /></Show>
     <Show when={!profiles()} fallback={<Profiles />}>
@@ -101,7 +101,7 @@ function Shell(props: ParentProps) {
             <view width={1030} height={86}><Glass width={1030} height={86} radius={43} />
               <Show when={nav.some(([path]) => location.pathname === '/' + path)}><view skipFocus x={16 + nav.slice(0, Math.max(0, nav.findIndex(([path]) => location.pathname === '/' + path))).reduce((sum, entry) => sum + entry[2] + 4, 0)} y={9} width={nav.find(([path]) => location.pathname === '/' + path)?.[2] || 145} height={68} color={0x71859b66} borderRadius={34} transition={{ x: motion.slide, width: motion.slide }} /></Show>
               <Row x={16} y={9} width={998} height={68} gap={4}>
-              {nav.map(([path, label, width]) => <Button id={`nav-${path}`} label={label} width={width} icon={path === 'search' ? 'search' : undefined} quiet selected={location.pathname === '/' + path} selectionFill={false} action={() => navigate('/' + path)} />)}
+              {nav.map(([path, label, width, icon]) => <Button id={`nav-${path}`} label={label} width={width} icon={icon} quiet selected={location.pathname === '/' + path} selectionFill={false} action={() => navigate('/' + path)} />)}
             </Row></view>
             <Button label={app.profile()?.name || 'Profiles'} width={240} icon="person" id="profile-menu" action={() => setProfileMenu(true)} />
             <Button label="Settings" icon="settings" iconOnly width={68} action={() => navigate('/settings')} />

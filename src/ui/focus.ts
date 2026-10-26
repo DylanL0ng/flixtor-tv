@@ -51,13 +51,13 @@ export function enterScope(id: string) {
 }
 
 /** Renderer transforms and DOM targets share one frame update, including clipping. */
-export function nodeRect(node?: ElementNode) {
+export function nodeRect(node?: ElementNode, clip = true) {
   if (!node) return { x: 0, y: 0, width: 0, height: 0, visible: false };
   let x = 0, y = 0, width = node.lng?.w || node.width || 0, height = node.lng?.h || node.height || 0, visible = true;
   for (let p: ElementNode | undefined = node; p; p = p.parent) {
     const n = p.lng;
     const sx = n.scaleX ?? 1, sy = n.scaleY ?? 1, pw = n.w || 0, ph = n.h || 0;
-    if (n.clipping) {
+    if (clip && n.clipping) {
       const right = Math.min(pw, x + width), bottom = Math.min(ph, y + height);
       x = Math.max(0, x); y = Math.max(0, y); width = Math.max(0, right - x); height = Math.max(0, bottom - y);
       if (!width || !height) visible = false;
@@ -73,7 +73,7 @@ export function nodeRect(node?: ElementNode) {
     visible: visible && x + width > 0 && y + height > 0 && x < 1920 && y < 1080 };
 }
 export function semantic(node: () => ElementNode | undefined, label: () => string, action: () => void,
-  disabled = () => false, selected = () => activeElement() === node(), focus = () => focusElement(node()), checked?: () => boolean) {
+  disabled = () => false, selected = () => activeElement() === node(), focus = () => focusElement(node()), checked?: () => boolean, escapeClip = () => false) {
   const scope = useContext(FocusScope);
   let button: HTMLButtonElement | undefined;
   const off = () => disabled() || activeScope() !== scope;
@@ -95,7 +95,7 @@ export function semantic(node: () => ElementNode | undefined, label: () => strin
   });
   trackFrame(() => {
     if (!button) return;
-    const rect = nodeRect(node());
+    const rect = nodeRect(node(), !escapeClip());
     Object.assign(button.style, { left: `${rect.x}px`, top: `${rect.y}px`, width: `${rect.width}px`, height: `${rect.height}px` });
     button.hidden = !rect.visible;
     button.tabIndex = !rect.visible || off() ? -1 : 0;

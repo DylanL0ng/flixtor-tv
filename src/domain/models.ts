@@ -7,6 +7,7 @@ export interface Title {
   id: string; path: string; name: string; poster?: string; year?: string; rating?: string;
   genres?: string; synopsis?: string; backdrop?: string; imdb?: string; source?: Source; type?: 'MOVIE' | 'SERIES';
 }
+export interface StageArtwork { poster?: string; backdrop?: string }
 export interface Episode { season: number; number: number; name: string; providerId?: string; displayNumber?: string; order?: number }
 export interface Detail { title: Title; episodes: Episode[] }
 export interface Shelf { label: string; titles: Title[] }

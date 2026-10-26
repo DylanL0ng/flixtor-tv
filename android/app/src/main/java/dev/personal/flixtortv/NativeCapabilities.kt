@@ -13,6 +13,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.security.MessageDigest
+import java.io.File
 
 internal class NativeCapabilities(private val activity: Activity, private val player: NativePlayer,
     private val emit: (String, JSONObject) -> Unit) {
@@ -23,6 +24,13 @@ internal class NativeCapabilities(private val activity: Activity, private val pl
         .callTimeout(45, TimeUnit.SECONDS).dns(NetworkPolicy)
         .addNetworkInterceptor { chain -> NetworkPolicy.url(chain.request().url.toString()); chain.proceed(chain.request()) }
         .followRedirects(false).followSslRedirects(false).build()
+    private val artworkCache = Cache(File(activity.cacheDir, "artwork"), 64L * 1024 * 1024)
+    private val artworkHttp = public.newBuilder().cache(artworkCache).addNetworkInterceptor { chain ->
+        val response = chain.proceed(chain.request())
+        if (response.header("Cache-Control") == null && response.header("Content-Type")?.startsWith("image/") == true)
+            response.newBuilder().header("Cache-Control", "public, max-age=604800").build()
+        else response
+    }.build()
     private var authenticated = public.newBuilder().cookieJar(sessions).build()
     private val prefs = activity.getSharedPreferences("solidtv", 0)
     private val credentials = prefs
@@ -35,14 +43,26 @@ internal class NativeCapabilities(private val activity: Activity, private val pl
         val url = artworkUrls[path]
         try {
             if (url == null) null else {
-                validateUrl(url)
-                public.newCall(Request.Builder().url(url).build()).execute().use { r ->
-                    val body = r.body ?: return@use null
-                    val mime = r.header("Content-Type", "image/jpeg")!!.substringBefore(';')
-                    if (!r.isSuccessful || !mime.startsWith("image/") || body.contentLength() > 4_000_000) return@use null
-                    val bytes = body.source().let { if (it.request(4_000_001)) null else it.readByteArray() } ?: return@use null
-                    WebResourceResponse(mime, null, bytes.inputStream())
+                var target = validateUrl(url)
+                for (redirect in 0..5) {
+                    val response = artworkHttp.newCall(Request.Builder().url(target).build()).execute()
+                    if (response.code in 300..399) {
+                        val location = response.header("Location")
+                        response.close()
+                        if (location == null || redirect == 5) return@PathHandler null
+                        target = validateUrl(target.resolve(location)?.toString() ?: return@PathHandler null)
+                        continue
+                    }
+                    val resource = response.use { r ->
+                        val body = r.body ?: return@use null
+                        val mime = r.header("Content-Type", "image/jpeg")!!.substringBefore(';')
+                        if (!r.isSuccessful || !mime.startsWith("image/") || body.contentLength() > 4_000_000) return@use null
+                        val bytes = body.source().let { if (it.request(4_000_001)) null else it.readByteArray() } ?: return@use null
+                        WebResourceResponse(mime, null, bytes.inputStream())
+                    }
+                    return@PathHandler resource
                 }
+                null
             }
         } catch (_: Exception) { null }
     }
@@ -98,7 +118,7 @@ internal class NativeCapabilities(private val activity: Activity, private val pl
             } catch (_: Exception) { done(error = if (method == "http") "NETWORK" else "INVALID") }
         }
     }
-    private fun validKey(args: JSONObject) = args.getString("key").also { require(it in listOf("app", "checkpoint")) }
+    private fun validKey(args: JSONObject) = args.getString("key").also { require(it in listOf("app", "checkpoint", "querySnapshot")) }
     private fun digest(id: String, pin: String) = MessageDigest.getInstance("SHA-256").digest("$id:$pin".toByteArray()).joinToString("") { "%02x".format(it) }
     private fun validateUrl(value: String): HttpUrl {
         return NetworkPolicy.url(value)
@@ -167,5 +187,5 @@ internal class NativeCapabilities(private val activity: Activity, private val pl
         result.put("checkpoint", prefs.getString("checkpoint", null)?.let(::JSONObject) ?: JSONObject.NULL)
         return result
     }
-    fun close() { calls.values.forEach(Call::cancel); calls.clear(); pool.shutdownNow(); public.dispatcher.cancelAll(); authenticated.dispatcher.cancelAll() }
+    fun close() { calls.values.forEach(Call::cancel); calls.clear(); pool.shutdownNow(); public.dispatcher.cancelAll(); authenticated.dispatcher.cancelAll(); runCatching { artworkCache.close() } }
 }

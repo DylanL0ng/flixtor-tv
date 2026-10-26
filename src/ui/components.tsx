@@ -1,9 +1,10 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, Show, useContext, type ParentProps } from 'solid-js';
 import { type ElementNode } from '@solidtv/solid';
+import { Portal } from '@solidtv/solid/primitives';
 import { useArtwork } from './artwork';
 import { fraction, type Title, type Viewing } from '../domain/models';
 import { icon, avatar, avatarColors, type IconName } from './icons';
-import { activeScope, FocusScope, semantic, registerFocus, focusElement, announce } from './focus';
+import { activeScope, FocusScope, nodeRect, semantic, registerFocus, focusElement, trackFrame, announce } from './focus';
 import { palette, motion, reducedMotion, glassColor, time } from './theme';
 export { palette, motion, time } from './theme';
 export { restoreFocus, focusElement, semantic } from './focus';
@@ -15,6 +16,10 @@ export function Glass(props: ParentProps<{ width: number; height: number; x?: nu
     <view x={props.radius || 28} y={1} width={Math.max(0, props.width - 2 * (props.radius || 28))} height={1} color={0xffffff38} />
     {props.children}
   </view>;
+}
+export function EdgeFade(props: { side: 'left' | 'right'; width: number; height: number }) {
+  return <view skipFocus x={props.side === 'left' ? 0 : 1728 - props.width} width={props.width} height={props.height} color={0x00000000}
+    linearGradient={{ colors: props.side === 'left' ? [palette.ground, 0x080c1400] : [0x080c1400, palette.ground], stops: [0, 1], angle: 0 }} />;
 }
 export interface ButtonProps {
   label: string; action(): unknown; width?: number; height?: number; autofocus?: boolean; id?: string;
@@ -87,26 +92,54 @@ export function Menu(props: { options: Option[]; title?: string; width?: number;
     <Show when={options().length > rows()}><text skipFocus y={(props.height || 630) - 26} width={props.width || 1200} height={28} fontSize={21} textAlign="right" color={palette.muted}>{`${index() + 1} / ${options().length}`}</text></Show>
   </view>;
 }
-export function Poster(props: { title: Title; action(): unknown; autofocus?: boolean; onFocus?(): void; id: string; width?: number; landscape?: boolean; viewing?: Viewing }) {
+export type PosterTitle = Pick<Title, 'name' | 'poster' | 'backdrop' | 'year'> & { source?: Title['source'] };
+export function Poster(props: { title: PosterTitle; action(): unknown; autofocus?: boolean; onFocus?(): void; id: string; width?: number; landscape?: boolean; viewing?: Viewing }) {
   const src = useArtwork(() => props.landscape ? props.title.backdrop || props.title.poster : props.title.poster);
   let node: ElementNode | undefined; const [focused, setFocused] = createSignal(false);
+  const [raised, setRaised] = createSignal({ x: 0, y: 0, width: 0, height: 0, scaleX: 1, scaleY: 1, visible: false });
   const width = () => props.width || 240, imageHeight = () => props.landscape ? width() * 0.5625 : width() * 1.5;
-  const off = semantic(() => node, () => props.title.name, props.action);
+  const height = () => imageHeight() + 76;
+  const off = semantic(() => node, () => props.title.name, props.action, undefined, undefined, undefined, undefined, () => focused());
   registerFocus(() => props.id, () => node, () => !!props.autofocus);
-  return <view ref={node} width={width()} height={imageHeight() + 76} skipFocus={off()} onEnter={() => { if (!off()) props.action(); return true; }}
+  trackFrame(() => {
+    if (!focused() || !node) return;
+    const full = nodeRect(node, false), canvas = document.querySelector('canvas')?.getBoundingClientRect();
+    const canvasScaleX = (canvas?.width || innerWidth) / 1920, canvasScaleY = (canvas?.height || innerHeight) / 1080;
+    const x = (full.x - (canvas?.left || 0)) / canvasScaleX, y = (full.y - (canvas?.top || 0)) / canvasScaleY;
+    const width = full.width / canvasScaleX, height = full.height / canvasScaleY;
+    const next = { x, y, width, height, scaleX: width / (props.width || 240), scaleY: height / (imageHeight() + 76), visible: nodeRect(node).visible };
+    setRaised(current => Object.keys(next).every(key => current[key as keyof typeof current] === next[key as keyof typeof next]) ? current : next);
+  });
+  return <>
+  <view ref={node} width={width()} height={height()} skipFocus={off()} onEnter={() => { if (!off()) props.action(); return true; }}
     zIndex={focused() ? 5 : 1} scale={reducedMotion() ? 1 : focused() ? 1.045 : 1} pivotY={1}
     transition={{ scale: motion.lift }} onFocus={() => { setFocused(true); props.onFocus?.(); }} onBlur={() => setFocused(false)}>
+    <PosterArtwork title={props.title} src={src()} width={width()} imageHeight={imageHeight()} landscape={props.landscape} focused={focused()} viewing={props.viewing} />
+  </view>
+  <Show when={focused() && raised().width > 0 && raised().visible}><Portal>
+    {/* A sibling zIndex cannot escape the rail/grid clip or its edge fade. */}
+    <view skipFocus x={raised().x} y={raised().y} width={raised().width} height={raised().height} zIndex={1000}>
+      <view skipFocus width={width()} height={height()} scaleX={raised().scaleX} scaleY={raised().scaleY} pivotX={0} pivotY={0}>
+        <PosterArtwork title={props.title} src={src()} width={width()} imageHeight={imageHeight()} landscape={props.landscape} focused viewing={props.viewing} />
+      </view>
+    </view>
+  </Portal></Show>
+  </>;
+}
+function PosterArtwork(props: { title: PosterTitle; src: string; width: number; imageHeight: number; landscape?: boolean; focused?: boolean; viewing?: Viewing }) {
+  const width = () => props.width, imageHeight = () => props.imageHeight;
+  return <view skipFocus width={width()} height={imageHeight() + 76}>
     <view width={width()} height={imageHeight()} color={palette.panelSolid} borderRadius={18}>
-      <Show when={src()} fallback={<view skipFocus width={width()} height={imageHeight()}>
-        <text skipFocus x={24} y={24} width={width() - 48} height={28} fontSize={18} color={palette.muted}>FLIXTOR</text>
+      <Show when={props.src} fallback={<view skipFocus width={width()} height={imageHeight()}>
+        <text skipFocus x={24} y={24} width={width() - 48} height={28} fontSize={18} color={palette.muted}>{props.title.source === 'HIANIME' ? 'ANIME' : props.title.source === 'FLIXTOR' ? 'FLIXTOR' : 'DISCOVERY'}</text>
         <text skipFocus x={24} y={props.landscape ? 76 : 115} width={width() - 48} height={props.landscape ? 100 : 200} fontFamily="Roboto700" fontSize={props.landscape ? 31 : 32} maxLines={4} color={palette.foreground}>{props.title.name}</text>
-        <text skipFocus x={24} y={imageHeight() - 48} width={width() - 48} height={30} fontSize={21} color={palette.muted}>{props.title.year || (props.title.source === 'HIANIME' ? 'Anime' : 'FlixTor')}</text>
-      </view>}><view skipFocus src={src()} width={width()} height={imageHeight()} borderRadius={18} imageType="regular" textureOptions={{ resizeMode: { type: 'cover' } }} /></Show>
-      <view skipFocus width={width()} height={imageHeight()} borderRadius={18} color={0x00000000} border={{ width: focused() ? 3 : 0, color: palette.foreground }} />
+        <text skipFocus x={24} y={imageHeight() - 48} width={width() - 48} height={30} fontSize={21} color={palette.muted}>{props.title.year || (props.title.source === 'HIANIME' ? 'Anime' : props.title.source === 'FLIXTOR' ? 'FlixTor' : '')}</text>
+      </view>}><view skipFocus src={props.src} width={width()} height={imageHeight()} borderRadius={18} imageType="regular" textureOptions={{ resizeMode: { type: 'cover' } }} /></Show>
+      <view skipFocus width={width()} height={imageHeight()} borderRadius={18} color={0x00000000} border={{ width: props.focused ? 3 : 0, color: palette.foreground }} />
     </view>
     <Show when={props.viewing}><view skipFocus x={8} y={imageHeight() - 10} width={width() - 16} height={4} color={0xffffff44} borderRadius={2}><view width={(width() - 16) * fraction(props.viewing!)} height={4} color={palette.accent} borderRadius={2} /></view></Show>
-    <Show when={src()}><text skipFocus y={imageHeight() + 16} width={width()} height={34} fontSize={26} maxLines={1} color={focused() ? palette.white : palette.foreground}>{props.title.name}</text></Show>
-    <text skipFocus y={imageHeight() + (src() ? 50 : 18)} width={width()} height={30} fontSize={22} maxLines={1} color={palette.muted}>{props.viewing ? props.viewing.episode ? `Episode ${props.viewing.episode.displayNumber || props.viewing.episode.number} · ${time(Math.max(0, props.viewing.duration - props.viewing.position))} left` : `${time(Math.max(0, props.viewing.duration - props.viewing.position))} left` : props.title.year || ''}</text>
+    <Show when={props.src}><text skipFocus y={imageHeight() + 16} width={width()} height={34} fontSize={26} maxLines={1} color={props.focused ? palette.white : palette.foreground}>{props.title.name}</text></Show>
+    <text skipFocus y={imageHeight() + (props.src ? 50 : 18)} width={width()} height={30} fontSize={22} maxLines={1} color={palette.muted}>{props.viewing ? props.viewing.episode ? `Episode ${props.viewing.episode.displayNumber || props.viewing.episode.number} · ${time(Math.max(0, props.viewing.duration - props.viewing.position))} left` : `${time(Math.max(0, props.viewing.duration - props.viewing.position))} left` : props.title.year || ''}</text>
   </view>;
 }
 export function Avatar(props: { index: number; size?: number; locked?: boolean }) {

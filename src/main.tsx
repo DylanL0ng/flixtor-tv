@@ -2,6 +2,8 @@ import { Config, createRenderer, loadFonts, registerDefaultShaders } from '@soli
 import { AppRoot } from './app/App';
 import { androidPlatform, type HostInfo, type Platform } from './platform/platform';
 import { Repository } from './domain/repository';
+import { QueryClient } from '@tanstack/solid-query';
+import { restoreQuerySnapshot, saveQuerySnapshot } from './app/query-snapshot';
 import { setReducedMotion } from './ui/theme';
 import { syncSemantics } from './ui/focus';
 
@@ -26,6 +28,20 @@ async function start() {
   else throw new Error('Open this application in its Android host.');
   const host = await platform.call<HostInfo>('ready');
   const repo = new Repository(platform); await repo.initialize();
+  const queries = new QueryClient({ defaultOptions: { queries: { staleTime: 60_000, gcTime: 5 * 60_000, retry: 1, refetchOnWindowFocus: false } } });
+  try { await restoreQuerySnapshot(queries, platform); } catch { /* A saved query cache never blocks a cold launch. */ }
+  let persistTimer: ReturnType<typeof setTimeout> | undefined, saving = Promise.resolve();
+  const persist = () => {
+    clearTimeout(persistTimer);
+    saving = saving.catch(() => {}).then(() => saveQuerySnapshot(queries, platform)).catch(() => {});
+  };
+  const schedulePersist = () => { clearTimeout(persistTimer); persistTimer = setTimeout(persist, 700); };
+  const unsubscribeQueries = queries.getQueryCache().subscribe(event => {
+    if (event.type === 'updated' && event.action.type === 'success') schedulePersist();
+  });
+  const visibility = () => { if (document.visibilityState === 'hidden') persist(); };
+  document.addEventListener('visibilitychange', visibility);
+  window.addEventListener('pagehide', persist, { once: true });
   const { render, renderer } = createRenderer();
   // SolidTV v1.7 doesn't register its material shaders when starting renderer v2.
   if ('registerShaderType' in renderer) registerDefaultShaders(renderer);
@@ -34,8 +50,8 @@ async function start() {
   const preference = window.matchMedia('(prefers-reduced-motion: reduce)');
   const motion = () => { const reduced = preference.matches || repo.current.skip['display:motion'] === 'reduced'; Config.animationsEnabled = !reduced; setReducedMotion(reduced); };
   preference.addEventListener('change', motion); motion();
-  window.addEventListener('pagehide', () => { preference.removeEventListener('change', motion); renderer.off('frameTick', syncSemantics); window.removeEventListener('resize', syncSemantics); }, { once: true });
-  render(() => <AppRoot platform={platform} host={host} repo={repo} />);
+  window.addEventListener('pagehide', () => { preference.removeEventListener('change', motion); renderer.off('frameTick', syncSemantics); window.removeEventListener('resize', syncSemantics); document.removeEventListener('visibilitychange', visibility); unsubscribeQueries(); clearTimeout(persistTimer); void saving; }, { once: true });
+  render(() => <AppRoot platform={platform} host={host} repo={repo} queries={queries} />);
   document.querySelector('canvas')?.setAttribute('aria-hidden', 'true');
 }
 void start().catch(() => {
