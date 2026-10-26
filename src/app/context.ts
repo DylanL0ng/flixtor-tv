@@ -9,13 +9,16 @@ import { SegmentService } from '../services/segments';
 import { createUpdates } from '../features/updates/updates';
 import type { Title, Detail, Episode, AnimeVersion } from '../domain/models';
 import type { createPlayback } from '../features/playback/playback';
+import type { InputRequest } from '../ui/input-state';
 
 export function createApp(platform: Platform, host: HostInfo, repo: Repository) {
   const [data, setData] = createStore(repo.current);
   const [profileId, setProfileId] = createSignal('');
   const [notice, setNotice] = createSignal('');
   const [selected, setSelected] = createSignal<Title>();
+  const [stage, setStage] = createSignal<Title>();
   const [authRevision, setAuthRevision] = createSignal(0);
+  const [inputRequest, setInputRequest] = createSignal<InputRequest>();
   const queries = new QueryClient({ defaultOptions: { queries: { staleTime: 60_000, gcTime: 5 * 60_000, retry: 1, refetchOnWindowFocus: false } } });
   const unsubscribe = repo.subscribe(value => setData(value));
   const flixtor = new FlixtorService(platform), anime = new AnimeService(platform), segments = new SegmentService(platform);
@@ -23,13 +26,23 @@ export function createApp(platform: Platform, host: HostInfo, repo: Repository) 
   let noticeTimer: ReturnType<typeof setTimeout> | undefined;
   function notify(value: string) { clearTimeout(noticeTimer); setNotice(value); noticeTimer = setTimeout(() => setNotice(''), 6000); }
   async function run(action: () => Promise<unknown>) { try { await action(); } catch (e) { notify(e instanceof Error ? e.message : 'Action failed. Try again.'); } }
-  onCleanup(() => { unsubscribe(); queries.clear(); updates.dispose(); clearTimeout(noticeTimer); platform.dispose(); });
+  function requestInput(options: Omit<InputRequest, 'resolve'>) {
+    return new Promise<string | null>(resolve => {
+      inputRequest()?.resolve(null);
+      const request: InputRequest = { ...options, resolve(value) { if (inputRequest() === request) setInputRequest(undefined); resolve(value); } };
+      setInputRequest(request);
+    });
+  }
+  onCleanup(() => { inputRequest()?.resolve(null); unsubscribe(); queries.clear(); updates.dispose(); clearTimeout(noticeTimer); platform.dispose(); });
   return { platform, host, repo, data, profileId, setProfileId, navigate: undefined as ((path: string) => void) | undefined,
     backHandlers: new Map<symbol, () => boolean>(), pendingPlayback: undefined as { detail: Detail; episode?: Episode | null; version?: AnimeVersion } | undefined,
-    resumePending: async () => {}, titleCache: new Map<string, Title>(), lastFocus: '', playback: undefined as ReturnType<typeof createPlayback> | undefined, profile: () => data.profiles.find(p => p.id === profileId()),
-    notice, notify, run, selected, setSelected, authRevision, refreshAccount: () => { setAuthRevision(v => v + 1); void queries.invalidateQueries({ queryKey: ['account'] }); },
+    resumePending: async () => {}, titleCache: new Map<string, Title>(), browseOrigins: new Map<string, { rail: number; item: number; focus: string }>(), lastFocus: '', lastProfile: '', playback: undefined as ReturnType<typeof createPlayback> | undefined, profile: () => data.profiles.find(p => p.id === profileId()),
+    notice, notify, run, selected, setSelected, stage, setStage, authRevision, refreshAccount: () => { setAuthRevision(v => v + 1); void queries.invalidateQueries({ queryKey: ['account'] }); },
     queries, flixtor, anime, segments, updates,
-    input: (label: string, value = '', secret = false) => platform.call<string | null>('input', { label, value, secret }) };
+    inputRequest, requestInput,
+    input: (label: string, value = '', secret = false) => requestInput({ label, value, mode: secret ? 'password' : /seconds|number|MAL ID/i.test(label) ? 'time' : 'text',
+      maxLength: label === 'Profile name' ? 30 : 256,
+      validate: value => label === 'Profile name' && !value.trim() ? 'Name is required.' : /seconds/i.test(label) && (!value.trim() || !Number.isFinite(Number(value)) || Number(value) < 0) ? 'Enter a valid time in seconds.' : undefined }) };
 }
 export type App = ReturnType<typeof createApp>;
 export const AppContext = createContext<App>();

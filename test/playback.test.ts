@@ -10,7 +10,7 @@ import { ServiceError } from '../src/domain/models';
 const stream = { uri: 'https://fixture.example/video.m3u8', headers: {}, captions: [] };
 const detail = { title: { id: '1', path: '/watch/movie/1/fixture', name: 'Fixture' }, episodes: [] };
 async function fixture(resolve = vi.fn(async () => stream)) {
-  const values = new Map<string, string>(), loads: Record<string, unknown>[] = [];
+  const values = new Map<string, string>(), loads: Record<string, unknown>[] = [], commands: Record<string, unknown>[] = [];
   let listener: (event: PlatformEvent) => void = () => {}, loadEvent: ((id: string) => void) | undefined;
   const platform: Platform = {
     async call<T>(method: string, args: Record<string, unknown> = {}) {
@@ -18,6 +18,7 @@ async function fixture(resolve = vi.fn(async () => stream)) {
       if (method === 'storage.set') values.set(String(args.key), String(args.value));
       if (method === 'legacy') return {} as T;
       if (method === 'player.load') { loads.push(args); loadEvent?.(String(args.id)); }
+      if (method === 'player.command') commands.push(args);
       return null as T;
     }, onEvent(fn) { listener = fn; return () => {}; }, dispose() {},
   };
@@ -29,7 +30,7 @@ async function fixture(resolve = vi.fn(async () => stream)) {
   const leave = vi.fn(), accountChanged = vi.fn();
   const player = createRoot(d => { dispose = d; return createPlayback(platform, repo, flixtor, anime as unknown as AnimeService, { intro: async () => [] } as unknown as SegmentService, () => profile, leave, accountChanged); });
   const emit = (id: string, extra: Partial<PlayerEvent> = {}) => listener({ type: 'player', value: { id, position: 30_000, duration: 100_000, buffered: 50_000, playing: false, playRequested: false, buffering: false, ended: false, time: performance.now(), tracks: [], bytes: 0, byteLimit: 1000, ...extra } });
-  return { player, repo, loads, emit, account, resolve, leave, accountChanged, anime,
+  return { player, repo, loads, commands, emit, account, resolve, leave, accountChanged, anime,
     onLoad(fn: (id: string) => void) { loadEvent = fn; },
     lifecycle(foreground: boolean) { listener({ type: 'lifecycle', value: { foreground } }); },
     profile(value: string) { profile = value; },
@@ -41,6 +42,17 @@ function deferred<T>() {
   return { promise, resolve };
 }
 describe('silent playback recovery', () => {
+  it('undoes a skip to its original position and clears undo on a new playback', async () => {
+    const f = await fixture();
+    try {
+      await f.player.start(detail); f.emit(f.player.state.id);
+      await f.player.skip({ id: 'intro-1', type: 'intro', typeId: 'intro', start: 20_000, end: 50_000 });
+      expect(f.player.state.undo?.position).toBe(30_000); expect(f.commands.at(-1)).toMatchObject({ action: 'seek', position: 50_000 });
+      await f.player.undoSkip(); expect(f.commands.at(-1)).toMatchObject({ action: 'seek', position: 30_000 }); expect(f.player.state.undo).toBeUndefined();
+      await f.player.skip({ id: 'intro-2', type: 'intro', typeId: 'intro', start: 20_000, end: 50_000 });
+      await f.player.start(detail); expect(f.player.state.undo).toBeUndefined();
+    } finally { f.close(); }
+  });
   it('refreshes account once after initial stream denial', async () => {
     const resolve = vi.fn().mockRejectedValueOnce(new ServiceError('SIGNED_OUT')).mockResolvedValue(stream); const f = await fixture(resolve);
     try { await f.player.start(detail); expect(f.account).toHaveBeenCalledTimes(1); expect(resolve).toHaveBeenCalledTimes(2); expect(f.loads).toHaveLength(1); expect(f.player.state.error).toBeUndefined(); } finally { f.close(); }

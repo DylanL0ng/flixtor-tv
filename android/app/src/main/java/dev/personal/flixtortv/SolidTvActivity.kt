@@ -3,6 +3,7 @@ package dev.personal.flixtortv
 import android.app.Activity
 import android.app.AlertDialog
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.view.KeyEvent
 import android.view.ViewGroup
@@ -12,6 +13,8 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.text.InputType
+import android.view.inputmethod.EditorInfo
 import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
@@ -82,14 +85,30 @@ class SolidTvActivity : Activity() {
             if (method == "input") {
                 val edit = EditText(this).apply {
                     setSingleLine(); setText(args.optString("value")); hint = args.optString("label")
-                    inputType = if (args.optBoolean("secret")) 129 else 1
+                    inputType = when (args.optString("mode")) {
+                        "integer", "pin" -> InputType.TYPE_CLASS_NUMBER
+                        "time" -> InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+                        else -> if (args.optBoolean("secret")) InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD else InputType.TYPE_CLASS_TEXT
+                    }
+                    setTextColor(Color.rgb(245, 248, 255)); setHintTextColor(Color.rgb(183, 196, 213))
+                    textSize = 22f; setPadding(28, 22, 28, 22)
+                    background = GradientDrawable().apply { setColor(Color.rgb(24, 33, 46)); cornerRadius = 24f }
+                    imeOptions = EditorInfo.IME_ACTION_DONE
                 }
                 input = AlertDialog.Builder(this).setTitle(args.optString("label")).setView(edit)
                     .setPositiveButton("Done") { _, _ -> reply.postMessage(response(id, edit.text.toString()).toString()) }
                     .setNegativeButton("Cancel") { _, _ -> reply.postMessage(response(id, JSONObject.NULL).toString()) }
                     .setOnCancelListener { reply.postMessage(response(id, JSONObject.NULL).toString()) }.create()
-                input?.window?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
-                input?.show(); edit.requestFocus()
+                input?.show()
+                input?.window?.apply {
+                    setBackgroundDrawable(GradientDrawable().apply { setColor(Color.rgb(24, 33, 46)); cornerRadius = 32f })
+                    setLayout((resources.displayMetrics.widthPixels * 0.65).toInt(), ViewGroup.LayoutParams.WRAP_CONTENT)
+                    setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
+                }
+                edit.setOnEditorActionListener { _, action, _ ->
+                    if (action == EditorInfo.IME_ACTION_DONE) { input?.getButton(AlertDialog.BUTTON_POSITIVE)?.performClick(); true } else false
+                }
+                edit.requestFocus()
             } else capabilities.call(id, method, args) { result -> reply.postMessage(result.toString()) }
         }
         root.addView(web, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
@@ -113,6 +132,7 @@ class SolidTvActivity : Activity() {
         return super.dispatchKeyEvent(event)
     }
     override fun onStop() {
+        input?.cancel()
         if (::player.isInitialized) player.suspendPlayback()
         emit("lifecycle", JSONObject().put("foreground", false))
         super.onStop()

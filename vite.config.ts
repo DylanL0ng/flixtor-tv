@@ -7,6 +7,6 @@ export default defineConfig({
   plugins: [browserBridge(), solid({ solid: { moduleName: '@solidtv/solid', generate: 'universal' } })],
   resolve: { dedupe: ['solid-js', '@solidtv/solid', '@solidtv/renderer'] },
   optimizeDeps: { exclude: ['@solidtv/solid', '@solidtv/renderer'] },
-  build: { target: 'chrome80', sourcemap: false },
+  build: { target: 'chrome80', sourcemap: false, rolldownOptions: { output: { codeSplitting: { groups: [{ name: 'tv-engine', test: /node_modules\/(?:@solidtv|solid-js)\// }] } } } },
   test: { environment: 'node', include: ['test/**/*.test.ts'] },
 });

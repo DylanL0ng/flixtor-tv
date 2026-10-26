@@ -1,8 +1,10 @@
 import fixtures from './fixtures/http.json';
 import type { Platform, PlatformEvent, PlayerEvent } from '../src/platform/platform';
+import { deviceInput } from '../src/ui/device-input';
 
 /** Development fixtures only. Production never substitutes mock networking. */
 export function fixturePlatform(): Platform {
+  const input = deviceInput();
   const listeners = new Set<(event: PlatformEvent) => void>();
   let player: PlayerEvent = { id: '', position: 0, duration: 120_000, buffered: 120_000, playing: false, playRequested: false, buffering: false, ended: false, time: performance.now(), tracks: [], bytes: 0, byteLimit: 1_000_000 };
   const timer = setInterval(() => {
@@ -20,7 +22,7 @@ export function fixturePlatform(): Platform {
     else if (method === 'storage.set') localStorage.setItem('flixtor-fixture:' + args.key, String(args.value));
     else if (method === 'storage.remove') localStorage.removeItem('flixtor-fixture:' + args.key);
     else if (method === 'legacy') value = {};
-    else if (method === 'input') value = window.prompt(String(args.label), String(args.value || ''));
+    else if (method === 'input') value = await input.open(args);
     else if (method === 'credentials.verify') { const stored = localStorage.getItem(`flixtor-fixture:pin:${args.profile}`); value = !stored || stored === await digest(String(args.profile), String(args.pin)); }
     else if (method === 'credentials.commit') { localStorage.setItem(`flixtor-fixture:pin:${args.profile}`, args.pin ? await digest(String(args.profile), String(args.pin)) : ''); localStorage.setItem('flixtor-fixture:app', String(args.value)); }
     else if (method === 'http') {
@@ -36,5 +38,5 @@ export function fixturePlatform(): Platform {
     } else if (method === 'art') value = '';
     return value as T;
   }
-  return { call, onEvent(fn) { listeners.add(fn); return () => listeners.delete(fn); }, dispose() { clearInterval(timer); listeners.clear(); } };
+  return { call, onEvent(fn) { listeners.add(fn); return () => listeners.delete(fn); }, dispose() { input.dispose(); clearInterval(timer); listeners.clear(); } };
 }

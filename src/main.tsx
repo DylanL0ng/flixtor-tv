@@ -1,14 +1,16 @@
-import { Config, createRenderer, loadFonts } from '@solidtv/solid';
+import { Config, createRenderer, loadFonts, registerDefaultShaders } from '@solidtv/solid';
 import { AppRoot } from './app/App';
 import { androidPlatform, type HostInfo, type Platform } from './platform/platform';
 import { Repository } from './domain/repository';
+import { setReducedMotion } from './ui/theme';
+import { syncSemantics } from './ui/focus';
 
 Config.rendererOptions = {
   appWidth: 1920, appHeight: 1080, clearColor: 0x00000000, targetFPS: 60,
   textureMemory: { criticalThreshold: 64 * 1024 * 1024 },
   deviceLogicalPixelRatio: window.innerHeight / 1080, devicePhysicalPixelRatio: 1,
 };
-Config.fontSettings = { fontFamily: 'Roboto', color: 0xf4f6fcff, fontSize: 28 };
+Config.fontSettings = { fontFamily: 'Roboto', color: 0xf5f8ffff, fontSize: 28, contain: 'both' };
 Config.animationsEnabled = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 Config.preventDefaultOnHandledKeys = true;
 void loadFonts([
@@ -24,7 +26,15 @@ async function start() {
   else throw new Error('Open this application in its Android host.');
   const host = await platform.call<HostInfo>('ready');
   const repo = new Repository(platform); await repo.initialize();
-  const { render } = createRenderer();
+  const { render, renderer } = createRenderer();
+  // SolidTV v1.7 doesn't register its material shaders when starting renderer v2.
+  if ('registerShaderType' in renderer) registerDefaultShaders(renderer);
+  renderer.on('frameTick', syncSemantics);
+  window.addEventListener('resize', syncSemantics);
+  const preference = window.matchMedia('(prefers-reduced-motion: reduce)');
+  const motion = () => { const reduced = preference.matches || repo.current.skip['display:motion'] === 'reduced'; Config.animationsEnabled = !reduced; setReducedMotion(reduced); };
+  preference.addEventListener('change', motion); motion();
+  window.addEventListener('pagehide', () => { preference.removeEventListener('change', motion); renderer.off('frameTick', syncSemantics); window.removeEventListener('resize', syncSemantics); }, { once: true });
   render(() => <AppRoot platform={platform} host={host} repo={repo} />);
   document.querySelector('canvas')?.setAttribute('aria-hidden', 'true');
 }

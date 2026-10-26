@@ -12,6 +12,7 @@ export function createPlayback(platform: Platform, repo: Repository, flixtor: Fl
     detail?: Detail; episode?: Episode | null; version?: AnimeVersion; id: string; loading: boolean; error?: Failure;
     event?: PlayerEvent; controls: boolean; menu: string; preview?: number; regions: Segment[]; segmentsUnavailable: boolean;
     chooser: boolean; available: AnimeVersion[]; stillWatching?: number; countdown?: number; bufferAhead: boolean; bufferReady: boolean; bufferStalled: boolean;
+    undo?: { position: number; type: string; until: number };
   }>({ id: '', loading: false, controls: true, menu: '', regions: [], segmentsUnavailable: false, chooser: false, available: [], bufferAhead: false, bufferReady: false, bufferStalled: false });
   let request = 0, abort = new AbortController(), source: Stream | undefined, identityProfile = '', savedAt = 0, interactionAt = performance.now(), foreground = true;
   let recoveryUsed = false, resumeAllowed = true, countdown = new Countdown(), skipped = new Set<string>(), bufferResume = false, bufferGrowth = 0, bufferAt = 0, segmentDuration = 0;
@@ -70,7 +71,7 @@ export function createPlayback(platform: Platform, repo: Repository, flixtor: Fl
     identityProfile = profileId(); source = undefined; segmentDuration = 0; savedAt = 0; skipped = new Set(); countdown = new Countdown(); recoveryUsed = false;
     attendance.start(automatic); resumeAllowed = foreground; interactionAt = performance.now();
     set({ detail, episode, version, id: '', loading: true, error: undefined, event: undefined, controls: true, menu: '', regions: [], segmentsUnavailable: false,
-      chooser: false, available: [], preview: undefined, countdown: undefined, stillWatching: undefined, bufferAhead: false, bufferReady: false, bufferStalled: false });
+      chooser: false, available: [], preview: undefined, countdown: undefined, stillWatching: undefined, bufferAhead: false, bufferReady: false, bufferStalled: false, undo: undefined });
     try {
       await Promise.all([progress, stopped]);
       if (!current(token, signal)) return;
@@ -117,7 +118,7 @@ export function createPlayback(platform: Platform, repo: Repository, flixtor: Fl
     if (event.type === 'lifecycle') {
       foreground = (event.value as { foreground: boolean }).foreground;
       attendance.playback(attendance.token, state.event?.playing ?? false, foreground);
-      if (!foreground) { resumeAllowed = false; void save(); set({ menu: '', bufferAhead: false }); } else set('controls', true);
+      if (!foreground) { resumeAllowed = false; void save(); set({ menu: '', bufferAhead: false, undo: undefined }); } else set('controls', true);
     }
     if (event.type !== 'player') return;
     const e = event.value as PlayerEvent; if (!state.id || e.id !== state.id || identityProfile !== profileId()) return;
@@ -133,11 +134,12 @@ export function createPlayback(platform: Platform, repo: Repository, flixtor: Fl
   });
   const timer = setInterval(() => {
     const e = state.event; if (!e || e.id !== state.id || state.error || state.loading) return;
+    if (state.undo && performance.now() >= state.undo.until) set('undo', undefined);
     const seconds = attendance.seconds; set('stillWatching', seconds);
     if (seconds === 0) { void stop(); return; }
     const active = state.regions.filter(r => r.start <= e.position && e.position < r.end && r.end <= e.duration).at(-1);
-    const canRun = foreground && !state.menu && !state.bufferAhead && !state.chooser && !attendance.pending && state.preview === undefined && !e.buffering;
-    if (active && effectiveAction(active) === 'AUTO' && !skipped.has(active.id) && canRun && e.playing) { skipped.add(active.id); void command('seek', { position: active.end }); }
+    const canRun = foreground && !state.menu && !state.bufferAhead && !state.chooser && !attendance.pending && !state.undo && state.preview === undefined && !e.buffering;
+    if (active && effectiveAction(active) === 'AUTO' && !skipped.has(active.id) && canRun && e.playing) { skipped.add(active.id); set('undo', { position: e.position, type: active.typeId, until: performance.now() + 5000 }); void command('seek', { position: active.end }); }
     const credits = state.regions.find(r => r.type === 'outro' && r.end <= e.duration && e.position >= r.start && (e.position < r.end || skipped.has(r.id)));
     const eligible = !!next() && !!profile()?.autoplay && (e.ended || !!credits && !attendance.dueAtCredits(attendance.token));
     if (countdown.tick(performance.now(), eligible, canRun && (e.ended || e.playing))) void advance(true);
@@ -147,7 +149,7 @@ export function createPlayback(platform: Platform, repo: Repository, flixtor: Fl
   async function cancel() {
     const id = state.id, progress = save();
     abort.abort(); request++; attendance.reset();
-    set({ id: '', event: undefined, loading: false, error: undefined, menu: '', stillWatching: undefined });
+    set({ id: '', event: undefined, loading: false, error: undefined, menu: '', stillWatching: undefined, undo: undefined });
     await Promise.all([progress, id ? platform.call('player.command', { id, action: 'stop' }) : Promise.resolve()]);
   }
   async function stop(destination?: string) { const work = cancel(), token = request; await work; if (token === request) leave(destination); }
@@ -157,7 +159,8 @@ export function createPlayback(platform: Platform, repo: Repository, flixtor: Fl
     menu(value: string) { interactionAt = performance.now(); set({ menu: value, controls: true }); void command('captions', { bottom: value ? 0.32 : 0.2, right: value ? 0.38 : 0.05 }); },
     preview(position?: number) { set('preview', position === undefined ? undefined : Math.max(0, Math.min(state.event?.duration || 0, position))); },
     async commitSeek() { if (state.preview !== undefined) await command('seek', { position: state.preview }); set('preview', undefined); },
-    skip(segment: Segment) { skipped.add(segment.id); return command('seek', { position: segment.end }); },
+    skip(segment: Segment) { skipped.add(segment.id); set('undo', { position: state.event?.position || segment.start, type: segment.typeId, until: performance.now() + 5000 }); return command('seek', { position: segment.end }); },
+    undoSkip() { const undo = state.undo; set('undo', undefined); return undo ? command('seek', { position: undo.position }) : Promise.resolve(); },
     cancelNext() { countdown.cancel(); set('countdown', undefined); },
     choose(version: AnimeVersion) { return start(state.detail!, state.episode, version); },
     continueWatching() { attendance.reset(); return advance(true); },

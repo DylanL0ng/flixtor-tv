@@ -13,6 +13,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.io.File
+import android.graphics.Bitmap
 
 /** Real WebGL, WebMessage bridge, Media3 and injected Android remote events. Offline QA package only. */
 @RunWith(AndroidJUnit4::class)
@@ -30,6 +32,12 @@ class SolidTvIntegrationTest {
         check(latch.await(5, TimeUnit.SECONDS)); return result
     }
     private fun press(code: Int) = instrument.sendKeyDownUpSync(code)
+    private fun capture(name: String) {
+        Thread.sleep(450)
+        val bitmap = instrument.uiAutomation.takeScreenshot() ?: return
+        File(instrument.targetContext.getExternalFilesDir(null), "liquid-$name.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        bitmap.recycle()
+    }
     private fun activate(web: WebView, label: String) {
         await("Control available: $label") { evaluate(web, "Array.from(document.querySelectorAll('button')).some(b=>b.textContent.includes(${org.json.JSONObject.quote(label)}))") == "true" }
         evaluate(web, "Array.from(document.querySelectorAll('button')).find(b=>b.textContent.includes(${org.json.JSONObject.quote(label)}))?.focus()")
@@ -43,14 +51,17 @@ class SolidTvIntegrationTest {
             val web = web(activity.window.decorView)!!
             activate(web, "My profile")
             await("Home route") { evaluate(web, "location.hash.includes('home')") == "true" }
+            capture("home")
             activate(web, "The Test Series")
-            activate(web, "Episodes, 1.")
+            capture("detail")
+            activate(web, "1. Chapter 1")
             await("Player started") { evaluate(web, "Array.from(document.querySelectorAll('button')).some(b=>b.textContent==='Pause')") == "true" }
             activate(web, "Pause")
             await("Paused") { evaluate(web, "Array.from(document.querySelectorAll('button')).some(b=>b.textContent==='Play')") == "true" }
             activate(web, "+10 seconds")
             activate(web, "Settings")
             await("Native tracks and SolidTV settings") { evaluate(web, "Array.from(document.querySelectorAll('button')).some(b=>b.textContent.includes('Video quality'))") == "true" }
+            capture("player-settings")
             press(KeyEvent.KEYCODE_BACK); press(KeyEvent.KEYCODE_BACK)
             await("Detail restored") { evaluate(web, "location.hash.includes('detail')") == "true" }
             assertEquals("true", evaluate(web, "!!document.querySelector('canvas')"))

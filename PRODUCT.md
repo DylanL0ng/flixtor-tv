@@ -1,11 +1,13 @@
-# Personal TV client
+# FlixTor TV
 
-Platform: Android TV / Google TV. Kotlin, Compose for TV, Media3.
+Platform: Android TV / Google TV. Kotlin host activity, SolidTV TypeScript application in a WebView, and native Android Media3 playback.
 
-Personal sideloaded client for ONN Android/Google TV hardware and Chromecast with Google TV. Sky IP061 has no supported APK installation path. Users browse Flixtor, sign into their existing VIP account, and watch using a remote. Website access rules remain authoritative. No WebView.
+Personal sideloaded TV client for ONN Android/Google TV hardware and Chromecast with Google TV. Users browse Flixtor, sign in to an existing VIP account, and watch using a remote. Website access rules remain authoritative. The WebView renders the catalogue, profiles, forms and playback controls; native Media3 owns video playback and captions. Browser fixtures support development without claiming live account or device acceptance.
 
-Anime has a dedicated popular catalog and search using a built-in HiAnime adapter. Manual starts and resumes ask for English dub or Japanese with subtitles; autoplay retains that version and stops when it is unavailable. Anime uses the native player and shared profile library, with separate viewing progress and local skip marks for each version. AniSkip adds community timestamps through explicit MAL/episode mappings; missing regions can be edited directly on the paused video timeline, including reusable custom types. Skip actions and buffer preferences are per-profile. It has no FlixTor account requirement or hosted backend.
+The experience is remote-first and supports keyboard and pointer input during browser development. Cold launch opens the profile chooser. Up to seven household profiles share one device service login, with separate local watchlists, viewing progress, avatars, quality preference, autoplay setting, and optional four-digit PIN. Cross-device sync, subscription purchasing and password management are outside this client.
 
-One shared service login per device with up to seven household profiles. Each profile has its own local watchlist, viewing progress, avatar, preferred maximum video quality, autoplay preference, and optional four digit PIN asked for when the profile is chosen. Cold launch opens the profile chooser. Cross-device Sync Codes are outside this release. No subscription purchasing or password management in the APK.
+Anime has a dedicated catalogue and search through the built-in HiAnime adapter. Manual starts and resumes offer English dub or Japanese with subtitles; autoplay retains the selected version and stops if it is unavailable. Anime uses native playback and the shared profile library, with version-specific viewing progress and local skip marks. AniSkip adds community timestamps through explicit MAL/episode mappings. Missing regions can be edited on the paused timeline, including reusable custom types. Skip actions and buffer preferences are per profile.
+
+The visual system is Liquid Cinema: full-bleed artwork stages, floating translucent navigation and actions, dense task surfaces, bright-art scrims, and distinct focus/selection/pending states. It uses bundled Roboto and the SolidTV canvas renderer on a 1920 × 1080 logical scene. Layouts scale to TV output and respect adjustable screen-fit margins. Reduced motion and reduced-transparency variants are supported.
 
 Personal source and signed release distribution: DylanL0ng/flixtor-tv on GitHub. Updates download automatically and install in place through Android's installer. Structural-error reports are user-triggered and delivered through a dedicated Vercel/Resend relay; unavailable deployment configuration must stay visible.
