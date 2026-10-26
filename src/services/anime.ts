@@ -3,6 +3,7 @@ import { secureUrl, USER_AGENT } from './flixtor';
 import { ServiceError, titleKey, episodeKey, type AnimeVersion, type Detail, type Episode, type Stream, type Title } from '../domain/models';
 import type { HttpResponse, Platform } from '../platform/platform';
 export const ANIME_BASE = 'https://hianime.at';
+export type AnimeCategory = 'most-popular' | 'top-airing' | 'recently-updated';
 function fragment(raw: string) { const data = JSON.parse(raw); if (data.status === false) throw new ServiceError('UNAVAILABLE'); if (typeof data.html !== 'string') throw new ServiceError('CHANGED'); return document(data.html); }
 function firstParty(path: string) { const url = new URL(secureUrl(path, ANIME_BASE)); if (url.origin !== ANIME_BASE) throw new ServiceError('ACCESS'); return url; }
 export function parseAnimeCards(html: string): Title[] {
@@ -60,6 +61,11 @@ export class AnimeService {
   async browse(query: string, page: number, signal?: AbortSignal) {
     if (query.length > 64 || page < 1 || page > 10000) throw new ServiceError('CHANGED');
     const url = new URL(query ? '/search' : '/most-popular', ANIME_BASE); url.searchParams.set('page', String(page)); if (query) url.searchParams.set('keyword', query);
+    return parseAnimeCards(await this.raw(url.href, signal));
+  }
+  async category(category: AnimeCategory, page: number, signal?: AbortSignal) {
+    if (!['most-popular', 'top-airing', 'recently-updated'].includes(category) || !Number.isInteger(page) || page < 1 || page > 10000) throw new ServiceError('CHANGED');
+    const url = new URL(`/${category}`, ANIME_BASE); url.searchParams.set('page', String(page));
     return parseAnimeCards(await this.raw(url.href, signal));
   }
   async detail(t: Title, signal?: AbortSignal): Promise<Detail> {

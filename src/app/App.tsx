@@ -9,6 +9,7 @@ import type { Repository } from '../domain/repository';
 import { Button, Glass, Menu, palette, motion } from '../ui/components';
 import { activeScope, announce, restoreFocus } from '../ui/focus';
 import { Backdrop } from '../ui/artwork';
+import { MaskedViewport } from '../ui/MaskedViewport';
 import { Overlay } from '../ui/Overlay';
 import { InputDialog } from '../ui/Input';
 import { Profiles } from '../features/profiles/Profiles';
@@ -90,23 +91,24 @@ function Shell(props: ParentProps) {
   onMount(() => { if (app.host.platform === 'android') void app.updates.check(); });
   createEffect(() => { if (app.notice()) announce(app.notice()); });
   const scale = () => Math.min((1920 * (1 - 2 * app.data.fit.horizontal / 100)) / 1728, (1080 * (1 - 2 * app.data.fit.vertical / 100)) / 972);
-  const nav = [['home', 'Home', 145, 'home'], ['movies', 'Movies', 155, 'film'], ['shows', 'TV shows', 180, 'tv'], ['anime', 'Anime', 145, 'anime'], ['list', 'My List', 155, 'list'], ['search', 'Search', 170, 'search']] as const;
+  const nav = [['home', 'Home', 165, 'home'], ['movies', 'Movies', 170, 'film'], ['shows', 'TV shows', 220, 'tv'], ['anime', 'Anime', 165, 'anime'], ['list', 'My List', 180, 'list'], ['search', 'Search', 180, 'search']] as const;
   return <view width={1920} height={1080}>
-    <Show when={!isPlayer()}><Backdrop url={profiles() ? undefined : app.stage()?.backdrop || app.stage()?.poster} poster={!app.stage()?.backdrop} /></Show>
+    <Show when={!isPlayer()}><Backdrop url={profiles() ? undefined : app.stage()?.backdrop || app.stage()?.poster} /></Show>
     <Show when={!profiles()} fallback={<Profiles />}>
       <Show when={!isPlayer()} fallback={props.children}>
         <Column x={1920 * app.data.fit.horizontal / 100} y={1080 * app.data.fit.vertical / 100} width={1728} height={972} scale={scale()} pivot={0} gap={30} scroll="none">
           <Show when={navVisible()}><Row width={1728} height={94} gap={30} scroll="none">
-            <text skipFocus width={220} height={68} fontSize={37} fontFamily="Roboto700" color={palette.foreground}>FLIXTOR</text>
-            <view width={1030} height={86}><Glass width={1030} height={86} radius={43} />
+            <text skipFocus width={190} height={68} fontSize={37} fontFamily="Roboto700" color={palette.foreground}>FLIXTOR</text>
+            <view width={1132} height={86}><Glass width={1132} height={86} radius={43} />
               <Show when={nav.some(([path]) => location.pathname === '/' + path)}><view skipFocus x={16 + nav.slice(0, Math.max(0, nav.findIndex(([path]) => location.pathname === '/' + path))).reduce((sum, entry) => sum + entry[2] + 4, 0)} y={9} width={nav.find(([path]) => location.pathname === '/' + path)?.[2] || 145} height={68} color={0x71859b66} borderRadius={34} transition={{ x: motion.slide, width: motion.slide }} /></Show>
-              <Row x={16} y={9} width={998} height={68} gap={4}>
-              {nav.map(([path, label, width, icon]) => <Button id={`nav-${path}`} label={label} width={width} icon={icon} quiet selected={location.pathname === '/' + path} selectionFill={false} action={() => navigate('/' + path)} />)}
+              <Row x={16} y={9} width={1100} height={68} gap={4}>
+              {nav.map(([path, label, width, icon]) => <Button id={`nav-${path}`} label={label} width={width} fontSize={24} icon={icon} quiet selected={location.pathname === '/' + path} selectionFill={false} action={() => navigate('/' + path)} />)}
             </Row></view>
             <Button label={app.profile()?.name || 'Profiles'} width={240} icon="person" id="profile-menu" action={() => setProfileMenu(true)} />
             <Button label="Settings" icon="settings" iconOnly width={68} action={() => navigate('/settings')} />
           </Row></Show>
-          <view width={1728} height={navVisible() ? 848 : 972} clipping forwardFocus={0}>{props.children}</view>
+          <MaskedViewport width={1728} height={navVisible() ? 848 : 972} vertical
+            onUp={() => navVisible() && restoreFocus(`nav-${nav.some(([path]) => location.pathname === '/' + path) ? location.pathname.slice(1) : 'home'}`)}>{props.children}</MaskedViewport>
         </Column>
       </Show>
     </Show>
@@ -131,11 +133,13 @@ function Shell(props: ParentProps) {
 }
 function Page() {
   const location = useLocation();
-  return <Suspense fallback={<text skipFocus width={1400} height={80} fontSize={30} color={palette.muted}>Loading…</text>}><Switch>
+  const lazyRoute = () => location.pathname === '/detail' || location.pathname.startsWith('/settings') || location.pathname === '/pair' || location.pathname === '/player';
+  // Catalogue queries render their own pending states. Suspending a mounted
+  // canvas subtree removes native nodes that Solid later tries to reuse.
+  return <Show when={lazyRoute()} fallback={<Catalog />}><Suspense fallback={<text skipFocus width={1400} height={80} fontSize={30} color={palette.muted}>Loading…</text>}><Switch>
     <Match when={location.pathname === '/detail'}><DetailPage /></Match>
     <Match when={location.pathname.startsWith('/settings')}><Settings /></Match>
     <Match when={location.pathname === '/pair'}><Pairing /></Match>
     <Match when={location.pathname === '/player'}><PlayerPage /></Match>
-    <Match when={true}><Catalog /></Match>
-  </Switch></Suspense>;
+  </Switch></Suspense></Show>;
 }

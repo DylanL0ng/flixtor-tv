@@ -1,6 +1,7 @@
-import { createEffect, createSignal, on, onCleanup, Show, untrack } from 'solid-js';
+import { createEffect, createSignal, on, onCleanup, Show } from 'solid-js';
+import { createBlurredImage } from '@solidtv/solid/primitives';
 import { useApp } from '../app/context';
-import { palette, motion, reducedMotion } from './theme';
+import { palette, reducedMotion } from './theme';
 
 export function useArtwork(url: () => string | undefined, preserve = false) {
   const app = useApp(); const [src, setSrc] = createSignal('');
@@ -14,28 +15,91 @@ export function useArtwork(url: () => string | undefined, preserve = false) {
   });
   return src;
 }
-export function Backdrop(props: { url?: string; width?: number; height?: number; poster?: boolean }) {
+
+const SCREEN_WIDTH = 1920;
+const SCREEN_HEIGHT = 1080;
+
+// Baseline alpha applied to backdrop textures so high-vibrancy artwork is dimmed
+// in dark living rooms and stays legible behind UI text.
+const BACKDROP_ALPHA = 0.45;
+const CROSSFADE_MS = 400;
+const SWAP_MS = 420;
+const BLUR_RADIUS = 40;
+const BLUR_RESOLUTION = 0.3;
+
+export function Backdrop(props: { url?: string; width?: number; height?: number }) {
   const src = useArtwork(() => props.url, true);
-  const [current, setCurrent] = createSignal(''), [previous, setPrevious] = createSignal(''), [alpha, setAlpha] = createSignal(1);
-  const width = () => props.width || 1920, height = () => props.height || 1080;
-  const posterWidth = () => Math.min(height() * 0.62, width() * 0.36);
-  const posterHeight = () => posterWidth() * 1.5;
-  const artX = () => props.poster ? width() - posterWidth() - width() * 0.08 : 0;
-  const artY = () => props.poster ? (height() - posterHeight()) / 2 : 0;
-  const artWidth = () => props.poster ? posterWidth() : width();
-  const artHeight = () => props.poster ? posterHeight() : height();
-  createEffect(on(src, source => {
-    const old = untrack(current); setPrevious(reducedMotion() || !source ? '' : old); setCurrent(source); setAlpha(reducedMotion() ? 0.92 : 0.1);
-    const frame = requestAnimationFrame(() => setAlpha(0.92));
-    const timer = setTimeout(() => setPrevious(''), 400);
+  const width = () => props.width || SCREEN_WIDTH;
+  const height = () => props.height || SCREEN_HEIGHT;
+
+  // Dual-slot buffer tracking for textures.
+  const [currentSrc, setCurrentSrc] = createSignal(src());
+  const [nextSrc, setNextSrc] = createSignal('');
+  // Independent opacity control for the smooth hardware cross-blend.
+  const [currentAlpha, setCurrentAlpha] = createSignal(BACKDROP_ALPHA);
+  const [nextAlpha, setNextAlpha] = createSignal(0.0);
+
+  // Keep animations on the GPU via the framework transition config so the
+  // main thread isn't blocked while panning across options.
+  const crossfade = { alpha: { duration: CROSSFADE_MS, easing: 'ease-in-out' as const } };
+
+  // Blurred ambient background layers (soft glow behind sharp textures).
+  const blurredCurrent = createBlurredImage(() => currentSrc() || undefined, { radius: BLUR_RADIUS, resolution: BLUR_RESOLUTION });
+  const blurredNext = createBlurredImage(() => nextSrc() || undefined, { radius: BLUR_RADIUS, resolution: BLUR_RESOLUTION });
+
+  createEffect(on(src, (source) => {
+    if (!source) { setCurrentSrc(''); setNextSrc(''); setCurrentAlpha(0.0); setNextAlpha(0.0); return; }
+    if (source === currentSrc()) return;
+
+    if (reducedMotion()) { setNextSrc(''); setCurrentSrc(source); setCurrentAlpha(BACKDROP_ALPHA); setNextAlpha(0.0); return; }
+
+    // 1. Stage the incoming buffer hidden under zero alpha.
+    setNextSrc(source);
+    setNextAlpha(0.0);
+
+    let frame: ReturnType<typeof requestAnimationFrame>;
+    let timer: ReturnType<typeof setTimeout>;
+    // 2. Schedule the asymmetric cross-blend across render frames.
+    frame = requestAnimationFrame(() => {
+      setCurrentAlpha(0.0);
+      setNextAlpha(BACKDROP_ALPHA);
+      // 3. Clear memory and shift states once the transition window resolves.
+      timer = setTimeout(() => {
+        setCurrentSrc(source);
+        setCurrentAlpha(BACKDROP_ALPHA); // elevate next state to current baseline
+        setNextSrc('');                   // free texture maps off the GPU
+        setNextAlpha(0.0);
+      }, SWAP_MS);
+    });
     onCleanup(() => { cancelAnimationFrame(frame); clearTimeout(timer); });
-  }));
+  }, { defer: true }));
+
+  const renderSharp = (url: string, alpha: () => number) => (
+    <view src={url} width={width()} height={height()}
+      imageType="regular" textureOptions={{ resizeMode: { type: 'cover' } }}
+      alpha={alpha()} transition={crossfade} />
+  );
+  const renderBlur = (data: string | null | undefined, alpha: () => number) => (
+    <Show when={data} keyed>
+      {(url) => <view src={url} x={0} y={0} width={width()} height={height()}
+        imageType="regular" textureOptions={{ resizeMode: { type: 'cover' } }}
+        alpha={alpha()} transition={crossfade} />}
+    </Show>
+  );
+
   return <view skipFocus width={width()} height={height()} clipping zIndex={-1}>
+    {/* Baseline: Solid Dark Canvas */}
     <view width={width()} height={height()} color={palette.ground} />
-    <Show when={props.poster && !!props.url}><view x={artX() - 18} y={artY() - 18} width={artWidth() + 36} height={artHeight() + 36} color={palette.panelSolid} borderRadius={20} /></Show>
-    <Show when={previous()} keyed>{url => <view src={url} x={artX()} y={artY()} width={artWidth()} height={artHeight()} imageType="regular" textureOptions={{ resizeMode: { type: props.poster ? 'contain' : 'cover' } }} alpha={0.92} borderRadius={props.poster ? 12 : 0} />}</Show>
-    <Show when={current()} keyed>{url => <view src={url} x={artX()} y={artY()} width={artWidth()} height={artHeight()} imageType="regular" textureOptions={{ resizeMode: { type: props.poster ? 'contain' : 'cover' } }} alpha={alpha()} borderRadius={props.poster ? 12 : 0} transition={{ alpha: motion.fade }} />}</Show>
-    <view width={width()} height={height()} color={0x00000000} linearGradient={{ colors: [palette.ground, 0x080c14bb, 0x080c1422], stops: [0, 0.52, 1], angle: -Math.PI / 2 }} />
-    <view width={width()} height={height()} color={0x00000000} linearGradient={{ colors: [0x080c144d, 0x080c1488], stops: [0, 1], angle: 0 }} />
+    {/* Blurred ambient background layer A */}
+    {renderBlur(blurredCurrent.error ? undefined : blurredCurrent(), currentAlpha)}
+    {/* Blurred ambient background layer B */}
+    {renderBlur(blurredNext.error ? undefined : blurredNext(), nextAlpha)}
+    {/* Texture Buffer A: Active background asset */}
+    <Show when={currentSrc()} keyed>{renderSharp(currentSrc(), currentAlpha)}</Show>
+    {/* Texture Buffer B: Staged incoming background asset */}
+    <Show when={nextSrc()} keyed>{renderSharp(nextSrc(), nextAlpha)}</Show>
+    {/* Hardware-Accelerated Static Burn Overlay Layer (Top -> Bottom) */}
+    <view width={width()} height={height()} color={0x00000000}
+      linearGradient={{ colors: [0x0a0a0c00, palette.ground], stops: [0, 1], angle: -Math.PI / 2 }} />
   </view>;
 }

@@ -27,6 +27,14 @@ export function fixturePlatform(): Platform {
     else if (method === 'credentials.commit') { localStorage.setItem(`flixtor-fixture:pin:${args.profile}`, args.pin ? await digest(String(args.profile), String(args.pin)) : ''); localStorage.setItem('flixtor-fixture:app', String(args.value)); }
     else if (method === 'http') {
       const url = new URL(String(args.url)); const path = url.pathname;
+      const overrides = JSON.parse(localStorage.getItem('flixtor-fixture:httpOverrides') || '{}') as Record<string, { status?: number; body: string; delay?: number }>;
+      const override = overrides[path + url.search] || overrides[path];
+      const requests = JSON.parse(sessionStorage.getItem('flixtor-fixture:requests') || '[]') as string[];
+      sessionStorage.setItem('flixtor-fixture:requests', JSON.stringify([...requests.slice(-199), path + url.search]));
+      const delay = override?.delay ?? Number(localStorage.getItem('flixtor-fixture:httpDelay') || 0);
+      if (delay > 0) await new Promise(resolve => setTimeout(resolve, Math.min(delay, 5000)));
+      signal?.throwIfAborted();
+      if (override) return { status: override.status ?? 200, body: override.body, location: '' } as T;
       const entries = fixtures as Record<string, string>;
       const discovery = url.hostname === 'cinemeta-catalogs.strem.io' ? (() => {
         const [, type, catalog] = /\/catalog\/(movie|series)\/([^/.]+)\.json$/.exec(path) || [];
@@ -35,14 +43,17 @@ export function fixturePlatform(): Platform {
           : catalog === 'imdbRating' ? [{ id: 'tt1234569', type, name: 'The Test Series', releaseInfo: '2026', poster: 'https://image.tmdb.org/t/p/w500/series.jpg', background: 'https://image.tmdb.org/t/p/original/series-bg.jpg', genres: ['Drama'], description: 'A fixture series.', imdbRating: '8.4' }] : [{ id: 'tt1234569', type, name: 'The Test Series', releaseInfo: '2026', poster: 'https://image.tmdb.org/t/p/w500/series.jpg', background: 'https://image.tmdb.org/t/p/original/series-bg.jpg', genres: ['Drama'], description: 'A fixture series.', imdbRating: '8.4' }];
         return JSON.stringify({ metas });
       })() : undefined;
-      const body = discovery ?? (args.client === 'anime' ? path.includes('/episode/list/') ? fixtures.animeEpisodes : path.includes('/episode/servers') ? fixtures.animeServers : path.includes('/mal/') ? fixtures.animeEmbed : path === '/most-popular' || path === '/search' ? fixtures.anime : fixtures.animeDetail : entries[path] ?? (path.startsWith('/ajax/v4/') ? fixtures.stream : path.startsWith('/watch/') ? fixtures.detail : path.startsWith('/show/') || args.client === 'flixtor' && path.startsWith('/search/') ? fixtures.catalog : '{}'));
+      const body = discovery ?? (args.client === 'anime' ? path.includes('/episode/list/') ? fixtures.animeEpisodes : path.includes('/episode/servers') ? fixtures.animeServers : path.includes('/mal/') ? fixtures.animeEmbed : ['/most-popular', '/top-airing', '/recently-updated', '/search'].includes(path) ? fixtures.anime : fixtures.animeDetail : entries[path] ?? (path.startsWith('/ajax/v4/') ? fixtures.stream : path.startsWith('/watch/') ? fixtures.detail : path.startsWith('/show/') || args.client === 'flixtor' && path.startsWith('/search/') ? fixtures.catalog : '{}'));
       value = { status: 200, body, location: '' };
     } else if (method === 'player.load') player = { ...player, id: String(args.id), position: Number(args.position || 0), playing: args.play !== false, playRequested: args.play !== false, error: undefined, ended: false, time: performance.now() };
     else if (method === 'player.command' && args.id === player.id) {
       if (args.action === 'seek') player.position = Number(args.position);
       if (args.action === 'play' || args.action === 'pause') player.playing = player.playRequested = args.action === 'play';
       if (args.action === 'stop') player = { ...player, id: '', playing: false, playRequested: false };
-    } else if (method === 'art') value = '';
+    } else if (method === 'art') {
+      const fixture = localStorage.getItem('flixtor-fixture:art');
+      value = fixture ? fixture.replace(';base64,', `;fixture=${encodeURIComponent(String(args.url))};base64,`) : '';
+    }
     return value as T;
   }
   return { call, onEvent(fn) { listeners.add(fn); return () => listeners.delete(fn); }, dispose() { input.dispose(); clearInterval(timer); listeners.clear(); } };

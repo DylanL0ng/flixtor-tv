@@ -11,6 +11,7 @@ import type { Title, Detail, Episode, AnimeVersion, StageArtwork } from '../doma
 import { CinemetaService } from '../services/cinemeta';
 import type { createPlayback } from '../features/playback/playback';
 import type { InputRequest } from '../ui/input-state';
+import type { BrowseOrigin } from '../features/catalog/CatalogShelves';
 
 export function createApp(platform: Platform, host: HostInfo, repo: Repository, queries: QueryClient) {
   const [data, setData] = createStore(repo.current);
@@ -36,7 +37,7 @@ export function createApp(platform: Platform, host: HostInfo, repo: Repository, 
   onCleanup(() => { inputRequest()?.resolve(null); unsubscribe(); queries.clear(); updates.dispose(); clearTimeout(noticeTimer); platform.dispose(); });
   return { platform, host, repo, data, profileId, setProfileId, navigate: undefined as ((path: string) => void) | undefined,
     backHandlers: new Map<symbol, () => boolean>(), pendingPlayback: undefined as { detail: Detail; episode?: Episode | null; version?: AnimeVersion } | undefined,
-    resumePending: async () => {}, titleCache: new Map<string, Title>(), browseOrigins: new Map<string, { rail: number; item: number; focus: string }>(), lastFocus: '', lastProfile: '', playback: undefined as ReturnType<typeof createPlayback> | undefined, profile: () => data.profiles.find(p => p.id === profileId()),
+    resumePending: async () => {}, titleCache: new Map<string, Title>(), browseOrigins: new Map<string, BrowseOrigin>(), lastFocus: '', lastProfile: '', playback: undefined as ReturnType<typeof createPlayback> | undefined, profile: () => data.profiles.find(p => p.id === profileId()),
     notice, notify, run, selected, setSelected, stage, setStage, authRevision, refreshAccount: () => { setAuthRevision(v => v + 1); void queries.invalidateQueries({ queryKey: ['account'] }); },
     queries, flixtor, anime, segments, cinemeta, updates,
     inputRequest, requestInput,

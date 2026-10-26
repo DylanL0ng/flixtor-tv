@@ -58,8 +58,9 @@ export function nodeRect(node?: ElementNode, clip = true) {
     const n = p.lng;
     const sx = n.scaleX ?? 1, sy = n.scaleY ?? 1, pw = n.w || 0, ph = n.h || 0;
     if (clip && n.clipping) {
-      const right = Math.min(pw, x + width), bottom = Math.min(ph, y + height);
-      x = Math.max(0, x); y = Math.max(0, y); width = Math.max(0, right - x); height = Math.max(0, bottom - y);
+      const margins = Array.isArray(n.clipping) ? n.clipping : [0, 0, 0, 0];
+      const right = Math.min(pw + margins[1], x + width), bottom = Math.min(ph + margins[2], y + height);
+      x = Math.max(-margins[3], x); y = Math.max(-margins[0], y); width = Math.max(0, right - x); height = Math.max(0, bottom - y);
       if (!width || !height) visible = false;
     }
     x = (n.x || 0) - pw * (n.mountX || 0) + pw * (n.pivotX ?? 0.5) * (1 - sx) + x * sx;

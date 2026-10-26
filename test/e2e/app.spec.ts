@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { dehydrate, QueryClient } from '@tanstack/solid-query';
 import { test, expect, type Page } from '@playwright/test';
 async function activate(page: Page, name: string | RegExp) { const control = page.getByRole('button', { name }).first(); await control.focus(); await page.keyboard.press('Enter'); }
 async function home(page: Page) { await page.goto('/'); await activate(page, 'My profile'); await expect(page).toHaveURL(/home/); }
@@ -14,8 +15,9 @@ test('remote profiles → detail → episode → player → settings → back', 
   await page.keyboard.press('Escape'); await page.keyboard.press('Escape'); await expect(page).toHaveURL(/detail/);
   expect(errors).toEqual([]);
 });
-test('sort choices reset the grid, preserve profile data and restore after browser navigation', async ({ page }) => {
-  await home(page); await activate(page, 'Movies'); await activate(page, 'Latest'); await activate(page, 'A–Z'); await expect(page).toHaveURL(/sort=name/);
+test('sort choices reorder shelves, preserve profile data and restore after browser navigation', async ({ page }) => {
+  await home(page); await activate(page, 'Movies');
+  await activate(page, 'Latest'); await activate(page, 'A–Z'); await expect(page).toHaveURL(/sort=name/);
   await activate(page, 'Northbound'); await expect(page).toHaveURL(/detail/); await page.goBack();
   await expect(page).toHaveURL(/sort=name/); await expect(page.locator('button[data-focused="true"]')).toHaveText('Northbound');
   await activate(page, 'My List'); await expect(page).toHaveURL(/list/); await page.reload();
@@ -44,33 +46,59 @@ test('Home restores its saved discovery snapshot on launch', async ({ page }) =>
   await page.reload(); await activate(page, 'My profile');
   await expect(page.getByRole('button', { name: 'Northbound', exact: true })).toBeAttached();
 });
-test('movie grid keeps full posters inside the viewport', async ({ page }) => {
+test('Home keeps its horizontal position across short rails and restores the focused title', async ({ page }) => {
+  await home(page);
+  const focused = page.locator('button[data-focused="true"]');
+  await page.keyboard.press('ArrowDown'); await expect(focused).toHaveText('Northbound');
+  await page.keyboard.press('ArrowRight'); await expect(focused).toHaveText('Quiet Harbour');
+  await page.keyboard.press('ArrowDown'); await expect(focused).toHaveText('Quiet Harbour');
+  await page.keyboard.press('ArrowDown'); await expect(focused).toHaveText('The Test Series');
+  await page.keyboard.press('ArrowUp'); await expect(focused).toHaveText('Quiet Harbour');
+  await page.keyboard.press('ArrowUp'); await expect(focused).toHaveText('Quiet Harbour');
+  await page.keyboard.press('ArrowLeft'); await expect(focused).toHaveText('Northbound');
+  await page.keyboard.press('ArrowRight'); await expect(focused).toHaveText('Quiet Harbour');
+  await page.keyboard.press('Enter'); await expect(page).toHaveURL(/detail/);
+  await page.keyboard.press('Escape'); await expect(page).toHaveURL(/home/);
+  await expect(focused).toHaveText('Quiet Harbour');
+});
+test('vertical navigation selects visible media without moving either rail horizontally', async ({ page }) => {
+  const queries = new QueryClient();
+  for (const [catalog, label] of [['top', 'Popular'], ['imdbRating', 'Featured']]) {
+    queries.setQueryData(['discovery', 'movie', catalog], Array.from({ length: 18 }, (_, index) => ({
+      id: `tt${catalog}${index}`, type: 'movie', name: `${label} ${index + 1}`, genres: [],
+    })));
+  }
+  const snapshot = JSON.stringify({ version: 1, savedAt: Date.now(), state: dehydrate(queries) });
+  queries.clear();
+  await page.addInitScript(snapshot => localStorage.setItem('flixtor-fixture:querySnapshot', snapshot), snapshot);
+  await home(page);
+  const focused = page.locator('button[data-focused="true"]');
+  await page.keyboard.press('ArrowDown'); await expect(focused).toHaveText('Popular 1');
+  for (let index = 2; index <= 11; index++) {
+    await page.keyboard.press('ArrowRight'); await expect(focused).toHaveText(`Popular ${index}`);
+  }
+  // Let horizontal motion settle before measuring the row's on-screen slots.
+  await page.waitForTimeout(400);
+  const popular = page.getByRole('button', { name: 'Popular 11', exact: true, includeHidden: true });
+  const featured = page.getByRole('button', { name: 'Featured 1', exact: true, includeHidden: true });
+  const popularX = await popular.evaluate(node => parseFloat(node.style.left));
+  const featuredX = await featured.evaluate(node => parseFloat(node.style.left));
+  await page.keyboard.press('ArrowDown'); await expect(focused).toHaveText(/^Featured [1-6]$/);
+  await page.waitForTimeout(400);
+  expect(await featured.evaluate(node => parseFloat(node.style.left))).toBeCloseTo(featuredX, 0);
+  await page.keyboard.press('ArrowUp'); await expect(focused).toHaveText('Popular 11');
+  await page.waitForTimeout(400);
+  expect(await popular.evaluate(node => parseFloat(node.style.left))).toBeCloseTo(popularX, 0);
+});
+test('movie shelves keep full posters inside the viewport', async ({ page }) => {
   await home(page); await activate(page, 'Movies');
-  const card = page.getByRole('button', { name: 'Northbound', exact: true });
+  const card = page.getByRole('button', { name: 'Northbound', exact: true }).first();
   await expect(card).toBeAttached();
   const bounds = await card.boundingBox();
   expect(bounds).not.toBeNull();
   expect(bounds!.height).toBeGreaterThan(450);
   expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(1080);
 });
-for (const [destination, first, below] of [
-  ['Movies', 'The Test Series', 'First Light'],
-  ['TV shows', 'The Test Series', 'First Light'],
-  ['Anime', 'Anime fixture 1', 'Anime fixture 7'],
-] as const) {
-  test(`${destination} grid scrolls down one complete row`, async ({ page }) => {
-    await home(page); await activate(page, destination);
-    const focused = page.locator('button[data-focused="true"]');
-    await expect(focused).toHaveText(first);
-    await page.keyboard.press('ArrowDown');
-    await expect(focused).toHaveText(below);
-    const visiblePeer = page.getByRole('button', { name: destination === 'Anime' ? 'Anime fixture 8' : 'A New Chapter', exact: true });
-    await expect(visiblePeer).toBeAttached();
-    const bounds = await visiblePeer.boundingBox();
-    expect(bounds).not.toBeNull();
-    expect(bounds!.height).toBeGreaterThan(350);
-  });
-}
 test('confirmation traps focus and restores it after cancellation', async ({ page }) => {
   await home(page); await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog', { name: 'Exit FlixTor TV?' })).toBeAttached();
@@ -130,7 +158,7 @@ for (const viewport of [{ width: 1920, height: 1080 }, { width: 1280, height: 72
     await page.setViewportSize(viewport); await page.goto('/');
     await page.getByRole('button', { name: 'My profile', exact: true }).click();
     await page.getByRole('button', { name: 'TV shows', exact: true }).click();
-    await page.getByRole('button', { name: 'The Test Series', exact: true }).click();
+    await page.getByRole('button', { name: 'The Test Series', exact: true }).first().click();
     await page.getByRole('button', { name: '2. Chapter 2', exact: true }).click(); await expect(page).toHaveURL(/player/);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await page.getByRole('button', { name: /settings, Subtitles/ }).click();

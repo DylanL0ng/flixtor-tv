@@ -1,9 +1,9 @@
-import { createEffect, createMemo, createSignal, on, onCleanup, onMount, Show, For, untrack } from 'solid-js';
+import { createEffect, createMemo, createSignal, on, onCleanup, Show, untrack } from 'solid-js';
 import { createInfiniteQuery, createQuery } from '@tanstack/solid-query';
 import { useLocation, useNavigate, useSearchParams } from '@solidjs/router';
-import { Column, Row, VirtualGrid, VirtualRow } from '@solidtv/solid/primitives';
+import { Column, Row, VirtualGrid } from '@solidtv/solid/primitives';
 import { useApp } from '../../app/context';
-import { Button, EdgeFade, Menu, palette, Poster, Status, restoreFocus, time } from '../../ui/components';
+import { Button, Menu, palette, Poster, Status, restoreFocus, time } from '../../ui/components';
 import { Overlay } from '../../ui/Overlay';
 import { Keyboard, TextField, type FieldHandle } from '../../ui/Input';
 import { failureOf, finished, titleKey, type Title, type Viewing } from '../../domain/models';
@@ -12,11 +12,11 @@ import { catalogueKey, distinctTitles, nextCataloguePage, resumeEpisode, resumeV
 import { narratePage } from '../../ui/narration';
 import { CINEMETA_TTL, matchPlayableTitle, type DiscoveryTitle } from '../../services/cinemeta';
 
-type HomeTitle = Title | DiscoveryTitle;
+import { CatalogShelves, isDiscovery, shelfTitleKey as homeKey, type ShelfTitle as HomeTitle } from './CatalogShelves';
+import { BrowseShelves } from './BrowseShelves';
 type HomeShelf = { label: string; titles: HomeTitle[]; continuing?: boolean };
 const genres = ['Action', 'Adventure', 'Animation', 'Biography', 'Comedy', 'Crime', 'Documentary', 'Drama', 'Family', 'Fantasy', 'History', 'Horror', 'Mystery', 'Romance', 'Sci-Fi', 'Thriller', 'War', 'Western'];
-const isDiscovery = (title: HomeTitle): title is DiscoveryTitle => 'type' in title && (title.type === 'movie' || title.type === 'series');
-const homeKey = (title: HomeTitle) => isDiscovery(title) ? `cinemeta:${title.type}:${title.id}` : titleKey(title);
+
 
 export function Catalog() {
   const app = useApp(), location = useLocation(), navigate = useNavigate(); const [params, setParams] = useSearchParams();
@@ -29,13 +29,14 @@ export function Catalog() {
   const featuredMovies = createQuery(() => ({ queryKey: ['discovery', 'movie', 'imdbRating'], enabled: destination() === 'home', queryFn: ({ signal }) => app.cinemeta.catalog('movie', 'imdbRating', undefined, signal), staleTime: CINEMETA_TTL, retry: false }));
   const popularSeries = createQuery(() => ({ queryKey: ['discovery', 'series', 'top'], enabled: destination() === 'home', queryFn: ({ signal }) => app.cinemeta.catalog('series', 'top', undefined, signal), staleTime: CINEMETA_TTL, retry: false }));
   const featuredSeries = createQuery(() => ({ queryKey: ['discovery', 'series', 'imdbRating'], enabled: destination() === 'home', queryFn: ({ signal }) => app.cinemeta.catalog('series', 'imdbRating', undefined, signal), staleTime: CINEMETA_TTL, retry: false }));
+  const categoryBrowse = () => ['movies', 'shows', 'anime'].includes(destination());
   const [genre, setGenre] = createSignal(''), [genreMenu, setGenreMenu] = createSignal(false);
   const genreMovies = createQuery(() => ({ queryKey: ['discovery', 'movie', 'genre', genre()], enabled: destination() === 'home' && !!genre(), queryFn: ({ signal }) => app.cinemeta.catalog('movie', 'top', genre(), signal), staleTime: CINEMETA_TTL, retry: false }));
   const genreSeries = createQuery(() => ({ queryKey: ['discovery', 'series', 'genre', genre()], enabled: destination() === 'home' && !!genre(), queryFn: ({ signal }) => app.cinemeta.catalog('series', 'top', genre(), signal), staleTime: CINEMETA_TTL, retry: false }));
   const remote = createInfiniteQuery(() => ({
     queryKey: catalogueKey(destination(), query(), sort(), app.profileId(), app.authRevision()),
     initialPageParam: 1, maxPages: 8,
-    enabled: !['home', 'list', 'continue'].includes(destination()) && (destination() !== 'search' || !!query().trim()),
+    enabled: destination() === 'search' && !!query().trim(),
     queryFn: ({ pageParam, signal }) => destination() === 'anime' ? app.anime.browse(query(), pageParam, signal) : destination() === 'search' ? app.flixtor.search(query(), pageParam, signal) : app.flixtor.browse(destination() === 'shows' ? 'tvshows' : 'movies', pageParam, sort(), signal),
     getNextPageParam: (last, pages, page) => nextCataloguePage(last, pages, page),
     retry: (count, error) => failureOf(error) === 'NETWORK' && count < 1,
@@ -71,11 +72,8 @@ export function Catalog() {
   const heroDetail = createQuery(() => ({ queryKey: ['detail', playableHero() ? titleKey(playableHero()!) : '', app.profileId(), app.authRevision()],
     enabled: destination() === 'home' && !!playableHero(), queryFn: ({ signal }) => playableHero()!.source === 'HIANIME' ? app.anime.detail(playableHero()!, signal) : app.flixtor.detail(playableHero()!, signal), retry: false }));
   createEffect(() => {
-    if (destination() === 'home') {
-      const title = heroDetail.data?.title || hero();
-      app.setStage(title ? { poster: title.poster, backdrop: title.backdrop } : undefined);
-    }
-    else app.setStage(undefined);
+    const title = highlighted() || (destination() === 'home' ? heroDetail.data?.title || hero() : titles()[0]);
+    app.setStage(title ? { poster: title.poster, backdrop: title.backdrop } : undefined);
   });
   const [delayed, setDelayed] = createSignal(false);
   createEffect(() => {
@@ -111,8 +109,11 @@ export function Catalog() {
     if (isDiscovery(item)) void app.run(() => openDiscovery(item, focus));
     else open(item, focus);
   }
-  function remember(rail: number, item: number, focus: string) {
-    app.browseOrigins.set(filterKey(), { rail, item, focus });
+  function remember(rail: number, item: number, focus: string, shelf?: string, title?: string) {
+    const previous = app.browseOrigins.get(filterKey());
+    const positions = { ...previous?.positions };
+    if (shelf && title) positions[shelf] = { title, item };
+    app.browseOrigins.set(filterKey(), { rail, item, focus, shelf, title, positions });
     if (app.browseOrigins.size > 32) app.browseOrigins.delete(app.browseOrigins.keys().next().value!);
   }
   const pending = () => destination() === 'home' ? home.isPending : remote.isEnabled && remote.isPending;
@@ -122,16 +123,23 @@ export function Catalog() {
   return <>
     <Show when={destination() === 'search' ? `search:${app.profileId()}:${app.authRevision()}` : filterKey()} keyed>{layoutKey => {
       const key = filterKey();
+      // Route changes replace this keyed owner. Do not also swap its old subtree
+      // during disposal: SolidTV would retain scene nodes whose native parents died.
+      const homeLayout = untrack(destination) === 'home', browseLayout = untrack(categoryBrowse);
       const origin = untrack(() => app.browseOrigins.get(key));
       const focusId = (rail: number, title: HomeTitle) => `${key}:${rail}:${homeKey(title)}`;
-      return <Show when={destination() === 'home'} fallback={
+      const shelfFocus = (shelf: string, title: HomeTitle, index: number, rail: number, id: string) => {
+        remember(rail, index, id, shelf, homeKey(title)); highlight(title);
+      };
+      return <Show when={homeLayout} fallback={
         <Column width={1728} height={848} gap={24} scroll="none">
-          <Row width={1728} height={82} gap={24}>
+          <Row width={1728} height={82} gap={24} skipFocus={!['movies', 'shows'].includes(destination())}
+            onUp={() => restoreFocus(`nav-${destination() === 'continue' ? 'home' : destination()}`)}>
             <text skipFocus width={destination() === 'search' ? 1728 : 1100} height={76} fontSize={54} fontFamily="Roboto700">{destination() === 'shows' ? 'TV shows' : destination() === 'list' ? 'My List' : destination() === 'continue' ? 'Continue Watching' : destination() === 'search' ? 'Find your next story.' : destination() === 'anime' ? 'Anime' : 'Movies'}</text>
             <Show when={['movies', 'shows'].includes(destination())}><Button label={sort() === 'best' ? 'Top rated' : sort() === 'name' ? 'A–Z' : 'Latest'} width={220} action={() => setSortMenu(true)} /></Show>
-            <Show when={destination() === 'anime'}><Button label="Search anime" icon="search" width={280} action={() => app.run(async () => { const value = await app.input('Search anime', query()); if (value !== null) setParams({ q: value, page: undefined }); })} /></Show>
             <Show when={delayed() && destination() !== 'search'}><text skipFocus width={280} height={54} fontSize={24} color={palette.muted}>{remote.isFetchingNextPage ? 'Loading more…' : 'Refreshing…'}</text></Show>
           </Row>
+          <Show when={browseLayout} fallback={<>
           <Show when={destination() === 'search'} fallback={<>
             <Show when={pending()}><Status message="Loading catalogue…" /></Show>
             <Show when={!pending() && !titles().length && !error()}><Column width={1500} height={240} gap={24}>
@@ -145,9 +153,14 @@ export function Catalog() {
               initial={origin?.item || 0} restore={!!origin} focus={(title, index) => remember(0, index, `${filterKey()}:0:${titleKey(title)}`)} open={title => open(title, `${filterKey()}:0:${titleKey(title)}`)} end={loadMore} />
           </Show>
           <Show when={error() && destination() !== 'search'}><Row width={1728} height={86} gap={24}><text skipFocus width={1100} height={80} fontSize={26} maxLines={2} color={palette.danger}>{failureMessages[failureOf(error())]}</text><Button label="Try again" action={retry} /><Button label="Account" width={220} action={() => navigate('/settings/account')} /></Row></Show>
+          </>}>
+            <BrowseShelves destination={destination()} sort={sort()} query={query()} prefix={key} origin={origin}
+              viewing={continuing()} focus={shelfFocus} open={open} />
+          </Show>
         </Column>
       }>
-        <Column width={1728} height={848} gap={30} scroll="edge" selected={origin ? origin.rail + 1 : 0}>
+        <CatalogShelves shelves={shelves().map(shelf => ({ ...shelf, id: shelf.label, viewAll: () => navigate('/continue') }))}
+          prefix={key} height={848} origin={origin} viewing={continuing()} focus={shelfFocus} open={chooseHomeTitle} header={<>
           <Column width={1728} height={440} gap={18} scroll="none">
             <Show when={hero()} fallback={<text skipFocus width={950} height={150} fontSize={76} fontFamily="Roboto700">Welcome, {app.profile()?.name || 'FlixTor'}</text>}>{selectedHero => {
               const current = selectedHero() as HomeTitle;
@@ -181,30 +194,8 @@ export function Catalog() {
           <Show when={!shelves().length && (home.isPending || discoveryLoading())}><Status message="Finding something to watch…" /></Show>
           <Show when={!discoveryLoading() && !discoveryQueries().some(query => query.data?.length) && home.isError}><Status message="Discovery is unavailable. Try again or browse Movies and TV Shows." error /></Show>
           <Show when={home.isError && !shelves().length}><Button label="Retry FlixTor catalogue" autofocus action={() => void home.refetch()} /></Show>
-          <For each={shelves()}>{(shelf, rail) => {
-            const visible = shelf.continuing ? 4 : 6;
-            const railHeight = shelf.continuing ? 320 : 480;
-            const [position, setPosition] = createSignal(origin?.rail === rail() ? origin.item : 0);
-            return <Column width={1728} height={railHeight + 72} gap={24} scroll="none">
-            <Row width={1728} height={48} gap={24} skipFocus={!shelf.continuing}><text skipFocus width={1250} height={48} fontSize={36} fontFamily="Roboto700">{shelf.label}</text>
-              <Show when={shelf.continuing}><Button label="View Continue Watching" height={48} width={370} quiet action={() => navigate('/continue')} /></Show>
-            </Row>
-            <view width={1728} height={railHeight} clipping forwardFocus={0}>
-              <VirtualRow each={shelf.titles} x={8} width={1712} height={railHeight} gap={28} displaySize={visible} bufferSize={2} scroll="edge" wrap={false}
-                onLeft={function (this: { selected?: number }) { return this.selected === 0; }}
-                onRight={function (this: { selected?: number }) { return this.selected !== undefined && this.selected >= shelf.titles.length - 1; }}
-                selected={origin?.rail === rail() ? origin.item : 0}>
-                {title => <Poster title={title()} width={shelf.continuing ? 400 : 260} landscape={shelf.continuing}
-                viewing={shelf.continuing && !isDiscovery(title()) ? resumeViewing(continuing(), title() as Title) : undefined} id={focusId(rail(), title())}
-                autofocus={origin?.focus === focusId(rail(), title())} action={() => chooseHomeTitle(title(), focusId(rail(), title()))}
-                onFocus={() => { const item = shelf.titles.findIndex(t => homeKey(t) === homeKey(title())); setPosition(item); remember(rail(), item, focusId(rail(), title())); highlight(title()); }} />}
-            </VirtualRow>
-              <Show when={position() >= visible}><EdgeFade side="left" width={56} height={railHeight} /></Show>
-              <Show when={position() + visible < shelf.titles.length}><EdgeFade side="right" width={56} height={railHeight} /></Show>
-            </view>
-          </Column>;
-          }}</For>
-        </Column>
+        </>} />
+
       </Show>;
     }}</Show>
     <Show when={sortMenu()}><Overlay title="Sort titles" close={() => setSortMenu(false)} width={700} height={510}><Menu width={620} height={438} title="Sort titles" options={[
@@ -223,7 +214,7 @@ function TitleGrid(props: { titles: Title[]; prefix: string; columns: number; wi
   const rowHeight = () => cardWidth() * 1.5 + 78;
   const visibleRows = () => Math.max(1, Math.floor((props.height - 20 + rowGap) / (rowHeight() + rowGap)));
   const viewportHeight = () => visibleRows() * rowHeight() + (visibleRows() - 1) * rowGap + 20;
-  return <view width={props.width} height={viewportHeight()} clipping forwardFocus={0}>
+  return <view width={props.width} height={viewportHeight()} clipping={[20, 20, 20, 20]} forwardFocus={0}>
     <VirtualGrid each={props.titles} x={8} y={10} width={props.width - 16} height={viewportHeight() - 20} gap={rowGap} columns={props.columns} rows={visibleRows()} buffer={1} scroll="edge" selected={props.initial || 0} wrap={false}
       onEndReachedThreshold={props.columns * 2} onEndReached={props.end}>
       {(title, index) => <Poster title={title()} width={cardWidth()} id={`${props.prefix}:0:${titleKey(title())}`} viewing={props.viewing && resumeViewing(props.viewing, title())}
