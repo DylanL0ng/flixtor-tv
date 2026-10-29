@@ -1,13 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import fixtures from './fixtures/http.json';
 import { decodePlayback, parseAccount, parseCards, parseDetail, parseHome, parseStream, responseFailure, safePath } from '../src/services/flixtor';
-import { parseAnimeEpisodes, parseAnimeServers, animeMapping } from '../src/services/anime';
+import { parseAnimeCards, parseAnimeEpisodes, parseAnimeServers, animeMapping } from '../src/services/anime';
 import { parseAniSkip, parseIntroDb } from '../src/services/segments';
 import { episodeKey, orderedEpisodes, titleKey } from '../src/domain/models';
 describe('service contracts migrated from Kotlin', () => {
   it('parses catalogue and preserves domain identity', () => { expect(parseCards(fixtures.catalog)).toHaveLength(12); expect(titleKey(parseCards(fixtures.catalog)[0])).toBe('t:1'); expect(parseHome(fixtures['/home'])[0].titles).toHaveLength(12); });
   it('deduplicates cards and rejects paths escaping origin', () => { expect(parseCards(fixtures.catalog + fixtures.catalog)).toHaveLength(12); for (const path of ['//evil.example/x', 'https://evil.example/', 'relative', '/\\evil.example']) expect(() => safePath(path)).toThrow(); });
   it('accepts explicit empty results only', () => { expect(parseCards('<div class=contentList>No results</div>')).toEqual([]); expect(() => parseCards('<html>unrecognized</html>')).toThrow('CHANGED'); });
+  it('accepts live anime empty-search markup without swallowing malformed pages or challenges', () => {
+    const empty = '<div id="main-content"><div class="block_area-content film_list film_list-grid"><p>No animes found.</p></div></div>';
+    expect(parseAnimeCards(empty)).toEqual([]);
+    expect(parseAnimeCards('<div class="film_list-wrap"></div>')).toEqual([]);
+    expect(() => parseAnimeCards('<html>unrecognized</html>')).toThrow('CHANGED');
+    expect(() => parseAnimeCards('<div id="main-sidebar"><p>No animes found.</p></div>')).toThrow('CHANGED');
+    expect(() => parseAnimeCards('cf-chl- ' + empty)).toThrow('ACCESS');
+  });
   it.each([
     ['{"error":"Please sign in"}', 200, 'SIGNED_OUT'], ['{"error":"VIP required"}', 200, 'VIP'],
     ['<p>Session expired</p>', 200, 'EXPIRED'], ['{"message":"Account is blocked"}', 200, 'BLOCKED'],

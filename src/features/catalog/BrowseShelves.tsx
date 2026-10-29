@@ -1,4 +1,4 @@
-import { createMemo } from 'solid-js';
+import { createMemo, type JSX } from 'solid-js';
 import { createInfiniteQuery } from '@tanstack/solid-query';
 import { useApp } from '../../app/context';
 import { failureOf, type Title, type Viewing } from '../../domain/models';
@@ -8,7 +8,7 @@ import { CatalogShelves, type BrowseOrigin, type CatalogShelf, type ShelfTitle }
 
 /** Mounted by the canonical route/filter key; query observers stay independent per category. */
 export function BrowseShelves(props: {
-  destination: string; sort: string; query: string; prefix: string; origin?: BrowseOrigin; viewing: Viewing[];
+  destination: string; sort: string; query: string; prefix: string; origin?: BrowseOrigin; viewing: Viewing[]; header?: JSX.Element;
   focus(shelf: string, title: ShelfTitle, index: number, rail: number, id: string): void;
   open(title: Title, id: string): void;
 }) {
@@ -28,10 +28,10 @@ export function BrowseShelves(props: {
       ...category,
       get titles() { return titles(); }, get pending() { return query.isPending; },
       get fetching() { return query.isFetching; }, get error() { return query.error; },
-      retry() { void (query.isFetchNextPageError ? query.fetchNextPage() : query.refetch()); },
+      retry() { return query.isFetchNextPageError ? query.fetchNextPage() : query.refetch(); },
       end() { if (query.hasNextPage && !query.isFetching && !query.isFetchNextPageError) void query.fetchNextPage(); },
     };
   });
-  return <CatalogShelves shelves={shelves} height={742} prefix={props.prefix} origin={props.origin} viewing={props.viewing}
+  return <CatalogShelves shelves={shelves} height={848} header={props.header} prefix={props.prefix} origin={props.origin} viewing={props.viewing}
     autofocus focus={props.focus} open={(title, id) => props.open(title as Title, id)} />;
 }

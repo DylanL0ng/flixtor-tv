@@ -1,9 +1,18 @@
 import { expect, it, vi } from 'vitest';
-import { browseCategories, distinctTitles, nextCataloguePage, shelfQueryKey } from '../src/features/catalog/catalog-state';
+import { browseCategories, catalogueKey, distinctTitles, nextCataloguePage, searchMode, shelfQueryKey } from '../src/features/catalog/catalog-state';
 import { AnimeService, type AnimeCategory } from '../src/services/anime';
 import type { Platform } from '../src/platform/platform';
 import type { Title } from '../src/domain/models';
 import fixtures from './fixtures/http.json';
+
+it('defaults search to media and isolates provider caches without changing browse keys', () => {
+  for (const value of [undefined, '', 'media', 'invalid', ['anime']]) expect(searchMode(value)).toBe('media');
+  expect(searchMode('anime')).toBe('anime');
+  const key = catalogueKey('search', 'Naruto', 'latest', 'a', 1);
+  expect(key).toEqual(catalogueKey('search', 'Naruto', 'latest', 'a', 1, 'media'));
+  expect(key).not.toEqual(catalogueKey('search', 'Naruto', 'latest', 'a', 1, 'anime'));
+  expect(catalogueKey('movies', '', 'latest', 'a', 1, 'anime')).toEqual(catalogueKey('movies', '', 'latest', 'a', 1));
+});
 
 it('orders category shelves from URL sort and isolates all server inputs in query keys', () => {
   expect(browseCategories('movies', 'name', '').map(s => s.id)).toEqual(['name', 'latest', 'best']);

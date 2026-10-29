@@ -104,7 +104,7 @@ function Shell(props: ParentProps) {
               <Row x={16} y={9} width={1100} height={68} gap={4}>
               {nav.map(([path, label, width, icon]) => <Button id={`nav-${path}`} label={label} width={width} fontSize={24} icon={icon} quiet selected={location.pathname === '/' + path} selectionFill={false} action={() => navigate('/' + path)} />)}
             </Row></view>
-            <Button label={app.profile()?.name || 'Profiles'} width={240} icon="person" id="profile-menu" action={() => setProfileMenu(true)} />
+            <Button label={app.profile()?.name || 'Profiles'} width={68} icon="person" iconOnly id="profile-menu" action={() => setProfileMenu(true)} />
             <Button label="Settings" icon="settings" iconOnly width={68} action={() => navigate('/settings')} />
           </Row></Show>
           <MaskedViewport width={1728} height={navVisible() ? 848 : 972} vertical

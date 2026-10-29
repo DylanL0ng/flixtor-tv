@@ -4,8 +4,8 @@ import { Column, Row, VirtualRow, type NavigableElement } from '@solidtv/solid/p
 import { Button, Poster, Status } from '../../ui/components';
 import { MaskedViewport } from '../../ui/MaskedViewport';
 import { activeElement, focusElement, nodeRect } from '../../ui/focus';
-import { failureMessages } from '../../ui/copy';
-import { failureOf, titleKey, type Title, type Viewing } from '../../domain/models';
+import { ContentError } from '../../ui/ContentError';
+import { titleKey, type Title, type Viewing } from '../../domain/models';
 import type { DiscoveryTitle } from '../../services/cinemeta';
 import { resumeViewing } from './catalog-state';
 
@@ -21,7 +21,7 @@ export interface BrowseOrigin {
 }
 export interface CatalogShelf {
   id: string; label: string; titles: ShelfTitle[]; continuing?: boolean;
-  pending?: boolean; fetching?: boolean; error?: unknown; retry?(): void; end?(): void;
+  pending?: boolean; fetching?: boolean; error?: unknown; retry?(): unknown | Promise<unknown>; end?(): void;
   viewAll?(): void;
 }
 
@@ -66,6 +66,7 @@ export function CatalogShelves(props: {
   return <Column width={1728} height={props.height} gap={30} scroll="always" offset={24}
     selected={props.origin ? initialRail() + (header() ? 1 : 0) : 0}>
     {header()}
+    <ContentError screenKey={props.prefix} operations={props.shelves.map(shelf => ({ id: shelf.id, error: shelf.error, fetching: shelf.fetching, retry: () => shelf.retry?.() }))} />
     <For each={props.shelves.map(shelf => shelf.id)}>{(id, rail) => {
       const shelf = () => props.shelves.find(s => s.id === id)!;
       const focusId = (title: ShelfTitle) => `${props.prefix}:${id}:${shelfTitleKey(title)}`;
@@ -105,15 +106,15 @@ export function CatalogShelves(props: {
           } else node.scrollToIndex?.(index, { noFocus: !ownsFocus });
         });
       }, { defer: true }));
-      return <Column width={1728} height={(shelf().continuing ? 320 : 480) + 72 + (shelf().error ? 110 : 0)} gap={24} scroll="none"
+      return <Column width={1728} height={(shelf().continuing ? 320 : 480) + 72} gap={24} scroll="none"
         ref={node => { containers.set(id, node); onCleanup(() => containers.delete(id)); }}
         onUp={() => !shelf().titles.length && move(id, -1)} onDown={() => !shelf().titles.length && move(id, 1)}>
         <Row width={1728} height={48} gap={24} skipFocus={!shelf().continuing}>
-          <text skipFocus width={1250} height={48} fontSize={36} fontFamily="Roboto700">{shelf().label}</text>
+          <text skipFocus width={1250} height={48} fontSize={36} fontFamily="Roboto700" maxLines={1}>{shelf().label}</text>
           <Show when={shelf().continuing}><Button label="View Continue Watching" height={48} width={370} action={() => shelf().viewAll?.()} /></Show>
           <Show when={delayed()}><Status width={400} message="Refreshing…" /></Show>
         </Row>
-        <Show when={shelf().titles.length} fallback={<Status message={shelf().pending ? 'Loading catalogue…' : shelf().error ? failureMessages[failureOf(shelf().error)] : 'No titles found.'} error={!!shelf().error} />}>
+        <Show when={shelf().titles.length} fallback={<Status message={shelf().pending ? 'Loading catalogue…' : shelf().error ? '' : 'No titles found.'} error={!!shelf().error} />}>
           <MaskedViewport width={1728} height={shelf().continuing ? 320 : 480}>
             <VirtualRow each={shelf().titles} x={16} width={1696} height={shelf().continuing ? 320 : 480} gap={28}
               displaySize={shelf().continuing ? 4 : 6} bufferSize={2} scroll={entering() === id ? 'none' : 'edge'} wrap={false}
@@ -139,10 +140,6 @@ export function CatalogShelves(props: {
             </VirtualRow>
           </MaskedViewport>
         </Show>
-        <Show when={shelf().error}><Row width={1728} height={86} gap={24}>
-          <Status width={1100} message={failureMessages[failureOf(shelf().error)]} error />
-          <Button label={`Retry ${shelf().label}`} autofocus={!shelf().titles.length && rail() === 0} action={() => { recovering = !shelf().titles.length; shelf().retry?.(); }} />
-        </Row></Show>
       </Column>;
     }}</For>
   </Column>;

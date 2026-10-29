@@ -17,6 +17,7 @@ test('remote profiles → detail → episode → player → settings → back', 
 });
 test('sort choices reorder shelves, preserve profile data and restore after browser navigation', async ({ page }) => {
   await home(page); await activate(page, 'Movies');
+  await page.keyboard.press('ArrowUp');
   await activate(page, 'Latest'); await activate(page, 'A–Z'); await expect(page).toHaveURL(/sort=name/);
   await activate(page, 'Northbound'); await expect(page).toHaveURL(/detail/); await page.goBack();
   await expect(page).toHaveURL(/sort=name/); await expect(page.locator('button[data-focused="true"]')).toHaveText('Northbound');
@@ -135,7 +136,7 @@ test('search preserves text focus through refresh and supports direct hardware t
   await page.keyboard.press('ArrowDown'); await page.keyboard.type('abc'); await expect(field).toHaveValue('quietabc');
   await expect(page).toHaveURL(/q=quietabc/);
 });
-test('search keyboard traverses its row before handing off and restores the last key', async ({ page }) => {
+test('search keyboard wraps its row and View results provides an explicit handoff', async ({ page }) => {
   await home(page); await activate(page, 'Search');
   const field = page.getByRole('textbox', { name: 'Search films and TV shows' });
   await field.fill('north'); await expect(page).toHaveURL(/q=north/); await page.keyboard.press('ArrowDown');
@@ -143,8 +144,30 @@ test('search keyboard traverses its row before handing off and restores the last
   await page.keyboard.press('ArrowRight'); await expect(page.locator('button[data-focused="true"]')).toHaveText('B');
   await page.keyboard.press('ArrowRight'); await page.keyboard.press('ArrowRight'); await page.keyboard.press('ArrowRight');
   await page.keyboard.press('ArrowRight'); await expect(page.locator('button[data-focused="true"]')).toHaveText('F');
-  await page.keyboard.press('ArrowRight'); await expect(page.locator('button[data-focused="true"]')).toHaveText('The Test Series');
+  await page.keyboard.press('ArrowRight'); await expect(page.locator('button[data-focused="true"]')).toHaveText('A');
   await page.keyboard.press('ArrowLeft'); await expect(page.locator('button[data-focused="true"]')).toHaveText('F');
+  await activate(page, 'View results'); await expect(page.locator('button[data-focused="true"]')).toHaveText('The Test Series');
+  await page.keyboard.press('ArrowLeft'); await expect(page.locator('button[data-focused="true"]')).toHaveText('View results');
+});
+test('search keyboard keeps columns through short rows, actions, and symbol changes', async ({ page }) => {
+  await home(page); await activate(page, 'Search');
+  const focused = page.locator('button[data-focused="true"]');
+  await page.getByRole('button', { name: 'E', exact: true }).focus();
+  await page.keyboard.press('ArrowUp'); await expect(focused).toHaveText('View results');
+  await page.keyboard.press('ArrowDown'); await expect(focused).toHaveText('E');
+  for (const key of ['K', 'Q', 'W', 'Z', '123', 'View results']) {
+    await page.keyboard.press('ArrowDown'); await expect(focused).toHaveText(key);
+  }
+  for (const key of ['123', 'Z', 'W', 'Q', 'K', 'E']) {
+    await page.keyboard.press('ArrowUp'); await expect(focused).toHaveText(key);
+  }
+  await page.getByRole('button', { name: '123', exact: true }).focus(); await page.keyboard.press('Enter'); await expect(focused).toHaveText('ABC');
+  await page.keyboard.press('ArrowUp'); await expect(focused).toHaveText(':');
+  await page.keyboard.press('ArrowDown'); await expect(focused).toHaveText('ABC');
+  await page.keyboard.press('Enter'); await expect(focused).toHaveText('123');
+  await page.keyboard.press('ArrowUp'); await expect(focused).toHaveText('Z');
+  await page.keyboard.press('Escape'); await expect(page.getByRole('textbox')).toBeFocused();
+  await page.keyboard.press('ArrowUp'); await expect(focused).toHaveText('Movies & TV');
 });
 test('screen-fit Cancel discards draft and Save persists it', async ({ page }) => {
   await home(page); await activate(page, 'Settings'); await activate(page, 'Display'); await activate(page, /Display, Adjust screen fit/);

@@ -1,6 +1,11 @@
 import { episodeKey, finished, orderedEpisodes, titleKey, type Detail, type Title, type Viewing } from '../../domain/models';
 
-export function catalogueKey(destination: string, query: string, sort: string, profile: string, auth: number) { return ['catalog', destination, query, sort, profile, auth] as const; }
+export type SearchMode = 'media' | 'anime';
+export function searchMode(value: unknown): SearchMode { return value === 'anime' ? 'anime' : 'media'; }
+export function catalogueKey(destination: string, query: string, sort: string, profile: string, auth: number, mode: SearchMode = 'media') {
+  const key = ['catalog', destination, query, sort, profile, auth] as const;
+  return destination === 'search' ? [...key, mode] as const : key;
+}
 export function shelfQueryKey(destination: string, category: string, query: string, profile: string, auth: number) { return ['catalog-shelf', destination, category, query, profile, auth] as const; }
 export function browseCategories(destination: string, sort: string, query: string) {
   if (destination === 'anime') return query.trim() ? [{ id: 'search', label: 'Search results' }] : [

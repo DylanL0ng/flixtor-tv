@@ -7,9 +7,9 @@ import { reducedMotion } from '../../ui/theme';
 import { Overlay } from '../../ui/Overlay';
 import { EpisodeList } from '../../ui/Episodes';
 import { useApp } from '../../app/context';
-import { failureOf, orderedEpisodes, series, titleKey, type Episode } from '../../domain/models';
+import { orderedEpisodes, series, titleKey, type Episode } from '../../domain/models';
 import { resumeEpisode, resumeViewing } from './catalog-state';
-import { failureMessages } from '../../ui/copy';
+import { ContentError } from '../../ui/ContentError';
 import { narratePage } from '../../ui/narration';
 
 export function DetailPage() {
@@ -40,7 +40,7 @@ export function DetailPage() {
         <text skipFocus width={1150} height={165} fontSize={76} fontFamily="Roboto700" maxLines={2}>{detail()?.title.name || title()?.name}</text>
         <text skipFocus width={1200} height={38} fontSize={26} color={palette.muted} maxLines={1}>{[title()?.year, title()?.genres, title()?.rating ? `Rating ${title()?.rating}` : '', title()?.source === 'HIANIME' ? 'Anime' : ''].filter(Boolean).join('   ·   ')}</text>
         <text skipFocus width={1000} height={115} fontSize={28} color={palette.muted} maxLines={3}>{detail()?.title.synopsis || (query.isPending ? 'Loading details…' : '')}</text>
-        <Show when={query.isError}><Row width={1400} height={68} gap={20}><Button label="Try again" autofocus action={() => void query.refetch()} /><Status width={1000} message={failureMessages[failureOf(query.error)]} error /></Row></Show>
+        <ContentError screenKey={JSON.stringify([params.title, app.profileId(), app.authRevision()])} operations={[{ id: 'detail', error: query.error, fetching: query.isFetching, retry: () => query.refetch() }]} />
         <Show when={detail()}><Row width={1728} height={72} gap={18}>
           <Button id="detail-play" label={viewing() ? `Resume${viewing()?.episode ? ` · Episode ${viewing()!.episode!.displayNumber || viewing()!.episode!.number}` : ''}` : 'Play'} icon="play" width={viewing()?.episode ? 370 : 230} primary autofocus action={() => start(initial())} />
           <Button label={saved() ? 'In My List' : 'Add to My List'} icon={saved() ? 'check' : 'plus'} width={310} disabled={saving()} selected={saved()} action={() => app.run(async () => {

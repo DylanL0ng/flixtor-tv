@@ -15,7 +15,8 @@ export function parseAnimeCards(html: string): Title[] {
     const img = one(card, '.film-poster-img'); let poster = ''; try { poster = secureUrl(attr(img, 'data-src') || attr(img, 'src'), ANIME_BASE); } catch { /* optional */ }
     return [{ id, path, name, poster, source: 'HIANIME' as const, type: all(card, '.fdi-item').some(n => /^movie$/i.test(text(n))) ? 'MOVIE' as const : 'SERIES' as const }];
   });
-  if (!cards.length && (!one(doc, '.film_list-wrap') || one(doc, '.flw-item'))) throw new ServiceError('CHANGED');
+  const explicitEmpty = all(doc, '#main-content .film_list p').some(node => /^no animes? found\.?$/i.test(text(node)));
+  if (!cards.length && (!one(doc, '.film_list-wrap') || one(doc, '.flw-item')) && !explicitEmpty) throw new ServiceError('CHANGED');
   return unique(cards, titleKey);
 }
 export function parseAnimeEpisodes(raw: string): Episode[] {

@@ -95,5 +95,7 @@ test('search cancels stale responses and distinguishes slow, empty and failed re
   await expect(page.getByRole('button', { name: 'Obsolete result', exact: true })).toHaveCount(0);
   await field.fill('empty'); await expect(page).toHaveURL(/q=empty/); await expect(page.locator('#status')).toContainText('No results');
   await field.fill('broken'); await expect(page.getByRole('button', { name: 'Try again', exact: true })).toBeAttached();
-  await expect(field).toBeEnabled(); await expect(field).toBeFocused();
+  await expect(field).toBeDisabled();
+  await page.getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(field).toBeEnabled();
 });

@@ -4,11 +4,11 @@ import { Column, Row } from '@solidtv/solid/primitives';
 import { useApp } from '../app/context';
 import { Button, palette, Status } from './components';
 import { Overlay } from './Overlay';
-import { activeScope, announce, FocusScope, focusElement, nodeRect, registerFocus, restoreFocus, trackFrame } from './focus';
+import { activeElement, activeScope, announce, FocusScope, focusElement, nodeRect, registerFocus, restoreFocus, trackFrame } from './focus';
 import { editValue, pinDigit, type InputMode, type InputRequest } from './input-state';
 
 export interface FieldHandle { focus(): void; edit(key: string): void }
-export function TextField(props: { label: string; value: string; change(value: string): void; width: number; mode?: InputMode; maxLength?: number; id: string; down?(): void; submit?(): void; handle?(handle: FieldHandle): void }) {
+export function TextField(props: { label: string; value: string; change(value: string): void; width: number; mode?: InputMode; maxLength?: number; id: string; up?(): void; down?(): void; submit?(): void; handle?(handle: FieldHandle): void }) {
   let node: ElementNode | undefined, input: HTMLInputElement | undefined;
   const scope = useContext(FocusScope);
   const [focused, setFocused] = createSignal(false);
@@ -25,6 +25,7 @@ export function TextField(props: { label: string; value: string; change(value: s
     input.onkeydown = event => {
       if (event.isComposing) return;
       if (event.key === 'ArrowDown') { event.preventDefault(); input!.blur(); props.down?.(); }
+      if (event.key === 'ArrowUp' && props.up) { event.preventDefault(); input!.blur(); props.up(); }
       if (event.key === 'Enter') { event.preventDefault(); props.submit?.(); }
       if (!['Escape', 'Tab'].includes(event.key)) event.stopPropagation();
     };
@@ -35,7 +36,7 @@ export function TextField(props: { label: string; value: string; change(value: s
       input!.setSelectionRange(Math.min(edit.caret, value.length), Math.min(edit.caret, value.length)); props.change(value);
     } });
   });
-  createEffect(() => { const value = props.value, disabled = activeScope() !== scope; if (input) { if (input.value !== value) input.value = value; input.disabled = disabled; } });
+  createEffect(() => { const value = props.value, label = props.label, disabled = activeScope() !== scope; if (input) { if (input.value !== value) input.value = value; input.setAttribute('aria-label', label); input.disabled = disabled; } });
   trackFrame(() => {
     if (!input) return; const rect = nodeRect(node);
     Object.assign(input.style, { left: `${rect.x}px`, top: `${rect.y}px`, width: `${rect.width}px`, height: `${rect.height}px`, fontSize: `${28 * rect.height / 76}px` });
@@ -43,10 +44,23 @@ export function TextField(props: { label: string; value: string; change(value: s
   });
   onCleanup(() => { if (input) input.value = ''; input?.remove(); });
   return <view ref={node} width={props.width} height={76} color={palette.panelSolid} borderRadius={20} border={{ width: focused() ? 2 : 1, color: focused() ? palette.accent : palette.line }}
-    onEnter={() => input?.focus()} onDown={() => { props.down?.(); return true; }} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)} />;
+    onEnter={() => input?.focus()} onUp={() => { if (!props.up) return false; props.up(); return true; }} onDown={() => { props.down?.(); return true; }} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)} />;
 }
 
-export function Keyboard(props: { edit(key: string): void; done(): void; width?: number; numeric?: boolean; prefix?: string; autofocus?: boolean; cancel?(): void; right?(): boolean; keyFocus?(id: string): void; pending?: boolean }) {
+export function Keyboard(props: { edit(key: string): void; done(): void; doneLabel?: string; leave?(): void; width?: number; numeric?: boolean; prefix?: string; autofocus?: boolean; cancel?(): void; keyFocus?(id: string): void; pending?: boolean }) {
+  const app = useApp(), scope = useContext(FocusScope);
+  let root: ElementNode | undefined;
+  if (props.leave) {
+    const back = Symbol('keyboard');
+    app.backHandlers.set(back, () => {
+      if (activeScope() !== scope) return false;
+      for (let node = activeElement(); node; node = node.parent) {
+        if (node === root) { props.leave?.(); return true; }
+      }
+      return false;
+    });
+    onCleanup(() => app.backHandlers.delete(back));
+  }
   const [symbols, setSymbols] = createSignal(!!props.numeric);
   const letters = () => symbols() ? '1234567890@.-_!?&()/+:'.split('') : 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
   const columns = () => props.numeric ? 3 : 6;
@@ -54,23 +68,35 @@ export function Keyboard(props: { edit(key: string): void; done(): void; width?:
   const prefix = () => props.prefix || 'keyboard';
   const keys = () => props.numeric ? '123456789'.split('').concat(['Delete', '0', props.cancel ? 'Cancel' : '.']) : letters();
   const rows = () => Array.from({ length: Math.ceil(keys().length / columns()) }, (_, i) => keys().slice(i * columns(), (i + 1) * columns()));
-  return <Column width={width()} height={props.numeric ? 320 : 540} gap={10} autofocus={props.autofocus} scroll="none">
-    <For each={rows()}>{(row, r) => <Row width={width()} height={68} gap={10} onRight={function (this: ElementNode) {
-      if (this.selected !== this.children.length - 1) return false;
-      return props.right?.() || false;
-    }}>
-      <For each={row}>{(key, c) => <Button id={`${prefix()}-${r()}-${c()}`} label={key} width={keyWidth()} height={68} autofocus={props.autofocus && r() === 0 && c() === 0}
-        onFocus={() => props.keyFocus?.(`${prefix()}-${r()}-${c()}`)} disabled={props.pending && key !== 'Cancel'} action={() => key === 'Cancel' ? props.cancel?.() : props.edit(key)} />}</For>
+  let preferredColumn = 0.5, movingVertically = false, changedLayout = false;
+  const keyId = (row: number, column: number) => row < rows().length ? `${prefix()}-${row}-${column}` : `${prefix()}-${row === rows().length ? 'tools' : 'actions'}-${column}`;
+  const centers = (row: number) => row < rows().length ? rows()[row].map((_, column) => column + 0.5) : row === rows().length ? [1, 3, 5] : [1.5, 4.5];
+  const focused = (row: number, column: number) => {
+    if (!movingVertically) preferredColumn = centers(row)[column];
+    props.keyFocus?.(keyId(row, column));
+  };
+  const vertical = (row: number, direction: number) => {
+    const count = rows().length + (props.numeric ? 0 : 2), target = (row + direction + count) % count;
+    const choices = centers(target);
+    const column = choices.reduce((best, x, index) => Math.abs(x - preferredColumn) < Math.abs(choices[best] - preferredColumn) ? index : best, 0);
+    movingVertically = true;
+    try { return restoreFocus(keyId(target, column)); } finally { movingVertically = false; }
+  };
+  const toggleSymbols = () => { changedLayout = true; setSymbols(!symbols()); restoreFocus(`${prefix()}-tools-2`); };
+  return <Column ref={root} width={width()} height={props.numeric ? 320 : 540} gap={10} autofocus={props.autofocus} scroll="none">
+    <For each={rows()}>{(row, r) => <Row width={width()} height={68} gap={10} wrap onUp={() => vertical(r(), -1)} onDown={() => vertical(r(), 1)}>
+      <For each={row}>{(key, c) => <Button id={`${prefix()}-${r()}-${c()}`} label={key} width={keyWidth()} height={68} autofocus={!changedLayout && props.autofocus && r() === 0 && c() === 0}
+        onFocus={() => focused(r(), c())} disabled={props.pending && key !== 'Cancel'} action={() => key === 'Cancel' ? props.cancel?.() : props.edit(key)} />}</For>
     </Row>}</For>
     <Show when={!props.numeric}>
-      <Row width={width()} height={68} gap={10}>
-        <Button label="Space" width={keyWidth() * 2 + 10} action={() => props.edit('Space')} />
-        <Button label="Delete" width={keyWidth() * 2 + 10} action={() => props.edit('Delete')} />
-        <Button label={symbols() ? 'ABC' : '123'} width={keyWidth() * 2 + 10} action={() => setSymbols(!symbols())} />
+      <Row width={width()} height={68} gap={10} wrap onUp={() => vertical(rows().length, -1)} onDown={() => vertical(rows().length, 1)}>
+        <Button id={`${prefix()}-tools-0`} label="Space" width={keyWidth() * 2 + 10} onFocus={() => focused(rows().length, 0)} action={() => props.edit('Space')} />
+        <Button id={`${prefix()}-tools-1`} label="Delete" width={keyWidth() * 2 + 10} onFocus={() => focused(rows().length, 1)} action={() => props.edit('Delete')} />
+        <Button id={`${prefix()}-tools-2`} label={symbols() ? 'ABC' : '123'} width={keyWidth() * 2 + 10} onFocus={() => focused(rows().length, 2)} action={toggleSymbols} />
       </Row>
-      <Row width={width()} height={68} gap={10}>
-        <Button label="Clear" width={(width() - 10) / 2} action={() => props.edit('Clear')} />
-        <Button label="Done" width={(width() - 10) / 2} primary action={props.done} />
+      <Row width={width()} height={68} gap={10} wrap onUp={() => vertical(rows().length + 1, -1)} onDown={() => vertical(rows().length + 1, 1)}>
+        <Button id={`${prefix()}-actions-0`} label="Clear" width={(width() - 10) / 2} onFocus={() => focused(rows().length + 1, 0)} action={() => props.edit('Clear')} />
+        <Button id={`${prefix()}-actions-1`} label={props.doneLabel || 'Done'} width={(width() - 10) / 2} primary onFocus={() => focused(rows().length + 1, 1)} action={props.done} />
       </Row>
     </Show>
   </Column>;
