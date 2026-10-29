@@ -15,6 +15,47 @@ test('remote profiles → detail → episode → player → settings → back', 
   await page.keyboard.press('Escape'); await page.keyboard.press('Escape'); await expect(page).toHaveURL(/detail/);
   expect(errors).toEqual([]);
 });
+test('detail remote selects an episode before playback', async ({ page }) => {
+  await home(page); await openTestSeries(page);
+  const focused = page.locator('button[data-focused="true"]');
+  await expect(focused).toHaveText('Play');
+  await page.keyboard.press('ArrowDown'); await expect(focused).toHaveText('Season 1');
+  await page.keyboard.press('ArrowDown'); await expect(focused).toHaveText('1. Chapter 1');
+  await page.keyboard.press('ArrowDown'); await expect(focused).toHaveText('2. Chapter 2');
+  await page.keyboard.press('ArrowUp'); await expect(focused).toHaveText('1. Chapter 1');
+  await page.keyboard.press('ArrowUp'); await expect(focused).toHaveText('Season 1');
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter'); await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(focused).toHaveText('1. Chapter 1');
+  await page.keyboard.press('ArrowDown'); await expect(focused).toHaveText('2. Chapter 2');
+  await page.keyboard.press('Enter'); await expect(page).toHaveURL(/player/);
+  await activate(page, 'Episodes');
+  await expect(focused).toHaveText('2. Chapter 2');
+});
+test('player arrows navigate transport and episodes without seeking', async ({ page }) => {
+  await home(page); await openTestSeries(page); await activate(page, '1. Chapter 1');
+  const focused = page.locator('button[data-focused="true"]');
+  await expect(focused).toHaveText('Settings');
+  await page.keyboard.press('ArrowLeft'); await expect(focused).toHaveText('Episodes');
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('dialog', { name: 'Episodes', exact: true })).toBeAttached();
+  await expect(focused).toHaveText('1. Chapter 1');
+  await page.keyboard.press('ArrowLeft'); await page.keyboard.press('ArrowRight');
+  await expect(focused).toHaveText('1. Chapter 1');
+  await page.keyboard.press('ArrowDown'); await expect(focused).toHaveText('2. Chapter 2');
+  await page.keyboard.press('Enter'); await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(focused).toHaveText('Settings');
+  await page.keyboard.press('ArrowUp');
+  const timeline = page.getByRole('slider', { name: 'Seek', exact: true });
+  await expect(timeline).toBeFocused();
+  const position = Number(await timeline.inputValue());
+  await page.keyboard.press('ArrowRight');
+  await expect(timeline).toHaveValue(String(position + 10_000));
+  await page.waitForTimeout(600); await expect(timeline).toBeFocused();
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('ArrowDown'); await expect(focused).toHaveText('Settings');
+  await page.keyboard.press('ArrowLeft'); await expect(focused).toHaveText('Episodes');
+});
 test('sort choices reorder shelves, preserve profile data and restore after browser navigation', async ({ page }) => {
   await home(page); await activate(page, 'Movies');
   await page.keyboard.press('ArrowUp');

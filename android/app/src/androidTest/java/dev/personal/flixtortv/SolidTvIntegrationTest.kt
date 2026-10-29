@@ -54,7 +54,14 @@ class SolidTvIntegrationTest {
             capture("home")
             activate(web, "The Test Series")
             capture("detail")
-            activate(web, "1. Chapter 1")
+            fun focused(label: String) = await("Remote focus: $label") {
+                evaluate(web, "document.querySelector('button[data-focused=\"true\"]')?.textContent===${org.json.JSONObject.quote(label)}") == "true"
+            }
+            focused("Play")
+            press(KeyEvent.KEYCODE_DPAD_DOWN); focused("Season 1")
+            press(KeyEvent.KEYCODE_DPAD_DOWN); focused("1. Chapter 1")
+            press(KeyEvent.KEYCODE_DPAD_DOWN); focused("2. Chapter 2")
+            press(KeyEvent.KEYCODE_DPAD_CENTER)
             await("Player started") { evaluate(web, "Array.from(document.querySelectorAll('button')).some(b=>b.textContent==='Pause')") == "true" }
             activate(web, "Pause")
             await("Paused") { evaluate(web, "Array.from(document.querySelectorAll('button')).some(b=>b.textContent==='Play')") == "true" }

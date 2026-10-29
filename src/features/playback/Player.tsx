@@ -148,7 +148,7 @@ export function PlayerPage() {
         <Column x={safeX()} y={1080 - safeY() - 292} width={safeWidth()} height={292} gap={16} scroll="none">
           <text skipFocus width={safeWidth()} height={48} fontSize={32} fontFamily="Roboto700" maxLines={1}>{state.detail?.title.name || ''}{state.episode ? `   ·   ${state.episode.name}` : ''}</text>
           <Timeline width={safeWidth()} />
-          <view width={safeWidth()} height={100}><Glass width={Math.min(safeWidth(), 960)} height={96} radius={48} />
+          <view width={safeWidth()} height={100} forwardFocus={1}><Glass width={Math.min(safeWidth(), 960)} height={96} radius={48} />
             <Row x={16} y={14} width={Math.min(safeWidth(), 960) - 32} height={68} gap={18}>
               <Button label={e()?.playing ? 'Pause' : 'Play'} icon={e()?.playing ? 'pause' : 'play'} iconOnly primary width={76} action={() => run(() => player.command(e()?.playing ? 'pause' : 'play'))} />
               <Button label="−10 seconds" icon="rewind" iconOnly width={76} quiet action={() => run(() => player.command('seek', { position: Math.max(0, e()!.position - 10_000) }))} />

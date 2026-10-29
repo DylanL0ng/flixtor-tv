@@ -11,7 +11,7 @@ export function Timeline(props: { width: number }) {
   const [focused, setFocused] = createSignal(false);
   const position = () => player.state.preview ?? player.state.event?.position ?? 0;
   const duration = () => player.state.event?.duration || 1;
-  registerFocus(() => 'player-timeline', () => node, () => true);
+  registerFocus(() => 'player-timeline', () => node);
   onMount(() => {
     input = document.createElement('input'); input.type = 'range'; input.min = '0'; input.step = '1000'; input.dataset.scope = 'screen';
     input.setAttribute('aria-label', 'Seek'); input.style.cssText = 'position:fixed;z-index:6;opacity:0;margin:0;cursor:pointer';

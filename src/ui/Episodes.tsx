@@ -5,7 +5,7 @@ import { episodeKey, fraction, titleKey, type Episode, type Title, type Viewing 
 
 export function EpisodeList(props: { title: Title; episodes: Episode[]; viewing: Viewing[]; width: number; height: number; current?: Episode | null; initial?: Episode; autofocus?: boolean; play(episode: Episode): void }) {
   const selected = () => Math.max(0, props.episodes.findIndex(e => episodeKey(e) === episodeKey(props.initial || props.current)));
-  return <view width={props.width} height={props.height} clipping>
+  return <view width={props.width} height={props.height} clipping forwardFocus={0}>
     <VirtualColumn each={props.episodes} width={props.width} height={props.height} displaySize={Math.max(1, Math.ceil(props.height / 112))} bufferSize={1} gap={16} scroll="edge" selected={selected()} wrap={false}>
       {episode => {
         const viewing = () => props.viewing.find(v => titleKey(v.title) === titleKey(props.title) && episodeKey(v.episode) === episodeKey(episode()));
