@@ -55,6 +55,42 @@ test('player arrows navigate transport and episodes without seeking', async ({ p
   await page.keyboard.press('Escape');
   await page.keyboard.press('ArrowDown'); await expect(focused).toHaveText('Settings');
   await page.keyboard.press('ArrowLeft'); await expect(focused).toHaveText('Episodes');
+  await page.waitForTimeout(1100); await expect(focused).toHaveText('Episodes');
+});
+for (const height of [1080, 720]) test(`remote reaches skip and undo through timeline at ${height}p while playback updates continue`, async ({ page }) => {
+  await page.setViewportSize({ width: height * 16 / 9, height });
+  await page.addInitScript(() => localStorage.setItem('flixtor-fixture:app', JSON.stringify({
+    schema: 1, profiles: [{ id: 'default', name: 'My profile', avatar: 0, quality: 0, autoplay: false, largerBuffer: false, locked: false }],
+    libraries: { default: { favorites: [], viewing: [] } }, fit: { horizontal: 5, vertical: 5 },
+    skip: { 'mark:t:1:1:1': JSON.stringify([{ id: 'intro', type: 'intro', typeId: 'intro', start: 0, end: 60_000 }]) },
+  })));
+  await home(page); await openTestSeries(page); await activate(page, '1. Chapter 1');
+  const focused = page.locator('button[data-focused="true"]');
+  await expect(focused).toHaveText('Settings');
+  await page.keyboard.press('ArrowUp'); await expect(page.getByRole('slider', { name: 'Seek' })).toBeFocused();
+  await page.keyboard.press('ArrowUp'); await expect(focused).toHaveText('Skip intro');
+  await page.waitForTimeout(1100); await expect(focused).toHaveText('Skip intro');
+  await page.screenshot({ path: `test-results/player-skip-${height}.png` });
+  await page.keyboard.press('Enter'); await expect(focused).toHaveText('Skipped intro · Undo');
+  await page.waitForTimeout(600); await expect(focused).toHaveText('Skipped intro · Undo');
+  await page.keyboard.press('Enter'); await expect(page.getByRole('slider', { name: 'Seek' })).toBeFocused();
+  await expect(page.getByRole('button', { name: 'Skip intro', exact: true })).toBeAttached();
+  await page.keyboard.press('ArrowUp'); await expect(focused).toHaveText('Skip intro');
+  await page.keyboard.press('ArrowDown'); await expect(page.getByRole('slider', { name: 'Seek' })).toBeFocused();
+});
+test('playback failure retry closes modal and account action leaves player', async ({ page }) => {
+  await home(page); await openTestSeries(page);
+  await page.evaluate(() => localStorage.setItem('flixtor-fixture:httpOverrides', JSON.stringify({ '/ajax/v4/e/1/1/1': { status: 502, body: '' } })));
+  await activate(page, '1. Chapter 1');
+  await expect(page.getByRole('dialog', { name: 'Playback unavailable' })).toBeAttached();
+  await page.evaluate(() => localStorage.removeItem('flixtor-fixture:httpOverrides'));
+  await activate(page, /Try again/); await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Pause', exact: true })).toBeAttached();
+  await page.keyboard.press('Escape');
+  await page.evaluate(() => localStorage.setItem('flixtor-fixture:httpOverrides', JSON.stringify({ '/ajax/v4/e/1/1/1': { status: 502, body: '' } })));
+  await activate(page, '1. Chapter 1');
+  await activate(page, /Check account in Settings/); await expect(page).toHaveURL(/settings\/account/);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
 });
 test('sort choices reorder shelves, preserve profile data and restore after browser navigation', async ({ page }) => {
   await home(page); await activate(page, 'Movies');

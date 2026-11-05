@@ -1,4 +1,4 @@
-import { createEffect, createSignal, For, on, onCleanup, Show } from 'solid-js';
+import { createEffect, createMemo, createSignal, For, on, onCleanup, Show } from 'solid-js';
 import { Column, Row } from '@solidtv/solid/primitives';
 import { useApp } from '../../app/context';
 import { Button, Glass, Menu, motion, palette, time, restoreFocus, type Option } from '../../ui/components';
@@ -104,9 +104,10 @@ export function PlayerPage() {
   const back = () => { if (draft()) closeEditor(); else player.menu(state.menu === 'settings' || state.menu === 'episodes' ? '' : state.menu === 'seasons' ? 'episodes' : state.menu === 'skip-actions' ? 'skip' : 'settings'); };
   const backKey = Symbol('player'); app.backHandlers.set(backKey, () => { if (draft()) { closeEditor(); return true; } return false; });
   onCleanup(() => { app.backHandlers.delete(backKey); if (draft()) editorResume = false; void player.cancel().catch(() => {}); });
-  createEffect(() => {
-    if (!state.menu && state.controls && state.event) queueMicrotask(() => restoreFocus('player-settings'));
-  });
+  const transportVisible = createMemo(() => !state.menu && state.controls && !!state.event && !state.error && !state.chooser && state.stillWatching === undefined && !state.bufferAhead);
+  createEffect(on(transportVisible, visible => {
+    if (visible) queueMicrotask(() => { if (transportVisible()) restoreFocus('player-settings'); });
+  }));
   const safeX = () => 1920 * app.data.fit.horizontal / 100, safeY = () => 1080 * app.data.fit.vertical / 100;
   const safeWidth = () => 1920 - 2 * safeX();
   createEffect(() => {
@@ -147,7 +148,7 @@ export function PlayerPage() {
         <view skipFocus y={690} width={1920} height={390} color={0x00000000} linearGradient={{ colors: [0x00000000, 0x080c14ee], stops: [0, 1], angle: 0 }} />
         <Column x={safeX()} y={1080 - safeY() - 292} width={safeWidth()} height={292} gap={16} scroll="none">
           <text skipFocus width={safeWidth()} height={48} fontSize={32} fontFamily="Roboto700" maxLines={1}>{state.detail?.title.name || ''}{state.episode ? `   ·   ${state.episode.name}` : ''}</text>
-          <Timeline width={safeWidth()} />
+          <Timeline width={safeWidth()} onUp={() => restoreFocus('player-skip')} />
           <view width={safeWidth()} height={100} forwardFocus={1}><Glass width={Math.min(safeWidth(), 960)} height={96} radius={48} />
             <Row x={16} y={14} width={Math.min(safeWidth(), 960) - 32} height={68} gap={18}>
               <Button label={e()?.playing ? 'Pause' : 'Play'} icon={e()?.playing ? 'pause' : 'play'} iconOnly primary width={76} action={() => run(() => player.command(e()?.playing ? 'pause' : 'play'))} />
@@ -161,10 +162,16 @@ export function PlayerPage() {
         </Column>
       </Show>
       <Show when={!state.menu && !draft() && state.preview === undefined}>
-        <view x={Math.max(safeX(), 1920 - safeX() - 590)} y={1080 - safeY() - (state.controls ? 430 : 160)} width={590} height={120}>
-          <Show when={state.undo}><Button label={`Skipped ${state.undo!.type} · Undo`} width={470} action={() => run(player.undoSkip)} /></Show>
-          <Show when={!state.undo && activeSegment() && state.countdown === undefined}><Button label={`Skip ${activeSegment()!.typeId}`} width={320} action={() => run(() => player.skip(activeSegment()!))} /></Show>
-          <Show when={!state.undo && state.countdown !== undefined}><Row width={590} height={80} gap={18}><Button label={`Next in ${state.countdown}s`} icon="forward" width={330} primary action={() => run(player.nextEpisode)} /><Button label="Cancel" width={210} action={player.cancelNext} /></Row></Show>
+        <view x={Math.max(safeX(), 1920 - safeX() - 590)} y={1080 - safeY() - (state.controls ? 430 : 160)} width={590} height={120}
+          onDown={() => restoreFocus('player-timeline')}>
+          <Show when={state.undo || activeSegment() && state.countdown === undefined}>
+            <Button id="player-skip" label={state.undo ? `Skipped ${state.undo.type} · Undo` : `Skip ${activeSegment()!.typeId}`} width={470}
+              action={() => run(async () => {
+                if (state.undo) { await player.undoSkip(); restoreFocus('player-timeline'); }
+                else await player.skip(activeSegment()!);
+              })} />
+          </Show>
+          <Show when={!state.undo && state.countdown !== undefined}><Row width={590} height={80} gap={18}><Button id="player-skip" label={`Next in ${state.countdown}s`} icon="forward" width={330} primary action={() => run(player.nextEpisode)} /><Button label="Cancel" width={210} action={player.cancelNext} /></Row></Show>
         </view>
       </Show>
       <Show when={state.menu}><Overlay title={state.menu === 'editor' ? 'Edit region' : state.menu === 'episodes' ? 'Episodes' : 'Playback settings'} width={state.menu === 'editor' ? 1480 : 720} drawer close={back}>

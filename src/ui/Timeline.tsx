@@ -5,7 +5,7 @@ import { activeScope, focusElement, nodeRect, registerFocus, trackFrame } from '
 import { palette, time } from './theme';
 import { timelineStep } from '../features/playback/timing';
 
-export function Timeline(props: { width: number }) {
+export function Timeline(props: { width: number; onUp?(): boolean }) {
   const player = useApp().playback!;
   let node: ElementNode | undefined, input: HTMLInputElement | undefined, held = 0;
   const [focused, setFocused] = createSignal(false);
@@ -33,7 +33,7 @@ export function Timeline(props: { width: number }) {
   });
   trackFrame(() => { if (input) { const rect = nodeRect(node); Object.assign(input.style, { left: `${rect.x}px`, top: `${rect.y}px`, width: `${rect.width}px`, height: `${rect.height}px` }); input.hidden = !rect.visible; } });
   onCleanup(() => input?.remove());
-  return <view ref={node} width={props.width} height={84} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
+  return <view ref={node} width={props.width} height={84} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)} onUp={() => props.onUp?.() ?? false}
     onLeft={() => { player.preview(position() - 10_000); return true; }} onRight={() => { player.preview(position() + 10_000); return true; }} onEnter={() => void player.commitSeek()}>
     <view skipFocus y={18} width={props.width} height={focused() ? 8 : 5} borderRadius={4} color={0xffffff33} />
     <view skipFocus y={18} width={props.width * Math.min(1, (player.state.event?.buffered || 0) / duration())} height={focused() ? 8 : 5} borderRadius={4} color={0xffffff66} />

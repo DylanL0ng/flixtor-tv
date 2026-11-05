@@ -1,3 +1,5 @@
+import { ServiceError } from '../domain/models';
+
 export interface HttpRequest {
   client: 'flixtor' | 'anime' | 'introdb' | 'aniskip' | 'updates' | 'report' | 'public';
   url: string; method?: 'GET' | 'POST'; headers?: Record<string, string>; body?: string;
@@ -34,7 +36,7 @@ export function androidPlatform(): Platform {
     const entry = pending.get(message.id);
     if (!entry) return;
     pending.delete(message.id); entry.cleanup();
-    if (message.error) entry.reject(new Error(message.error)); else entry.resolve(message.value);
+    if (message.error) entry.reject(message.error === 'MEDIA' || message.error === 'NETWORK' ? new ServiceError(message.error) : new Error(message.error)); else entry.resolve(message.value);
   };
   window.__platformEvent = event => { for (const listener of listeners) listener(event); };
   return {

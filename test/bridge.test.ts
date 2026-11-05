@@ -19,3 +19,12 @@ it('propagates cancellation and ignores late responses', async () => {
 it('disposal rejects pending work and removes event subscriptions', async () => {
   const h = host(); const request = h.platform.call('ready'); const rejected = expect(request).rejects.toThrow('Host disposed'); h.platform.dispose(); await rejected;
 });
+it.each(['MEDIA', 'NETWORK'])('preserves native %s failures for recovery UI', async error => {
+  const h = host();
+  try {
+    const request = h.platform.call('player.load');
+    const rejected = expect(request).rejects.toMatchObject({ failure: error });
+    h.nativeHost.onmessage?.({ data: JSON.stringify({ v: 1, id: h.sent[0].id, error }) });
+    await rejected;
+  } finally { h.platform.dispose(); }
+});

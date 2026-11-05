@@ -75,7 +75,10 @@ internal class NativeCapabilities(private val activity: Activity, private val pl
         if (method == "cancel") { calls.remove(args.optString("id"))?.cancel(); done(); return }
         if (method == "player.load" || method == "player.command") {
             try { if (method == "player.load") player.load(args) else player.command(args); done() }
-            catch (_: Exception) { done(error = "MEDIA") }; return
+            catch (_: Exception) {
+                if (method == "player.load") runCatching { player.command(JSONObject().put("id", args.optString("id")).put("action", "stop")) }
+                done(error = "MEDIA")
+            }; return
         }
         pool.execute {
             try {

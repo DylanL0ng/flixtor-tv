@@ -14,7 +14,7 @@ export function createPlayback(platform: Platform, repo: Repository, flixtor: Fl
     chooser: boolean; available: AnimeVersion[]; stillWatching?: number; countdown?: number; bufferAhead: boolean; bufferReady: boolean; bufferStalled: boolean;
     undo?: { position: number; type: string; until: number };
   }>({ id: '', loading: false, controls: true, menu: '', regions: [], segmentsUnavailable: false, chooser: false, available: [], bufferAhead: false, bufferReady: false, bufferStalled: false });
-  let request = 0, abort = new AbortController(), source: Stream | undefined, identityProfile = '', savedAt = 0, interactionAt = performance.now(), foreground = true;
+  let request = 0, loadSequence = 0, abort = new AbortController(), source: Stream | undefined, identityProfile = '', savedAt = 0, interactionAt = performance.now(), foreground = true;
   let recoveryUsed = false, resumeAllowed = true, countdown = new Countdown(), skipped = new Set<string>(), bufferResume = false, bufferGrowth = 0, bufferAt = 0, segmentDuration = 0;
   const attendance = new WatchingSession(() => performance.now());
   const profile = () => repo.current.profiles.find(p => p.id === identityProfile);
@@ -46,11 +46,20 @@ export function createPlayback(platform: Platform, repo: Repository, flixtor: Fl
     const stream = detail.title.source === 'HIANIME' ? await anime.playback(episode!, state.version!, signal) : await flixtor.playback(detail.title, episode, signal);
     if (!current(token, signal)) return;
     source = stream;
-    const p = profile(); const id = `${attendance.token}:${token}`; set('id', id);
-    await platform.call('player.load', { ...source, id, client: detail.title.source === 'HIANIME' ? 'anime' : 'flixtor', position,
+    const p = profile(); const id = `${attendance.token}:${token}:${++loadSequence}`; set('id', id);
+    try { await platform.call('player.load', { ...source, id, client: detail.title.source === 'HIANIME' ? 'anime' : 'flixtor', position,
       play: play && resumeAllowed && foreground && !attendance.pending && !attendance.finished,
       quality: p?.quality ?? 0, largerBuffer: p?.largerBuffer ?? false,
       checkpoint: { profileId: identityProfile, title: detail.title, episode: episode ?? null, version: state.version ?? null } }, signal);
+    } catch (error) {
+      // A native load may fail after creating its player. Retire it before
+      // refreshing the account or showing a blocking recovery dialog.
+      if (current(token, signal)) {
+        set({ id: '', event: undefined });
+        await platform.call('player.command', { id, action: 'stop' });
+      }
+      throw error;
+    }
     if (current(token, signal)) {
       set('loading', false); void fetchSegments(token, 0);
       // Native errors can arrive before the load acknowledgement.

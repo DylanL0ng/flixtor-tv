@@ -42,6 +42,35 @@ function deferred<T>() {
   return { promise, resolve };
 }
 describe('silent playback recovery', () => {
+  it('stops a partially loaded player before failed account recovery and permits retry and account navigation', async () => {
+    const f = await fixture();
+    f.onLoad(id => { f.emit(id, { playing: true }); throw new ServiceError('MEDIA'); });
+    f.account.mockRejectedValueOnce(new ServiceError('NETWORK'));
+    try {
+      await f.player.start(detail);
+      expect(f.player.state.error).toBe('NETWORK');
+      expect(f.player.state.id).toBe(''); expect(f.player.state.event).toBeUndefined();
+      expect(f.commands).toContainEqual({ id: f.loads[0].id, action: 'stop' });
+      f.onLoad(() => {});
+      await f.player.start(detail);
+      expect(f.player.state.error).toBeUndefined(); expect(f.player.state.id).toBe(f.loads[1].id);
+      await f.player.stop('/settings/account');
+      expect(f.leave).toHaveBeenCalledWith('/settings/account');
+      expect(f.commands.at(-1)).toMatchObject({ id: f.loads[1].id, action: 'stop' });
+    } finally { f.close(); }
+  });
+  it('gives a refreshed load its own identity and rejects delayed errors from the partial load', async () => {
+    const f = await fixture(); let first = true;
+    f.onLoad(id => { if (first) { first = false; f.emit(id, { playing: true }); throw new ServiceError('MEDIA'); } });
+    try {
+      await f.player.start(detail);
+      expect(f.loads).toHaveLength(2); expect(f.loads[0].id).not.toBe(f.loads[1].id);
+      f.emit(String(f.loads[1].id), { playing: true });
+      f.emit(String(f.loads[0].id), { error: 'ERROR_CODE_IO_BAD_HTTP_STATUS' });
+      expect(f.player.state.error).toBeUndefined(); expect(f.player.state.event?.playing).toBe(true);
+      expect(f.player.state.event?.id).toBe(f.loads[1].id);
+    } finally { f.close(); }
+  });
   it('undoes a skip to its original position and clears undo on a new playback', async () => {
     const f = await fixture();
     try {
