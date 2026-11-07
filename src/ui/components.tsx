@@ -22,7 +22,7 @@ export function EdgeFade(props: { side: 'left' | 'right'; width: number; height:
     linearGradient={{ colors: props.side === 'left' ? [palette.ground, 0x080c1400] : [0x080c1400, palette.ground], stops: [0, 1], angle: 0 }} />;
 }
 export interface ButtonProps {
-  label: string; action(): unknown; width?: number; height?: number; fontSize?: number; autofocus?: boolean; id?: string;
+  label: string; action(): unknown; item?: unknown; width?: number; height?: number; fontSize?: number; autofocus?: boolean; id?: string;
   disabled?: boolean; selected?: boolean; selectionFill?: boolean; onFocus?(): void; icon?: IconName; primary?: boolean; quiet?: boolean; iconOnly?: boolean;
 }
 export function Button(props: ButtonProps) {
@@ -39,7 +39,7 @@ export function Button(props: ButtonProps) {
   onCleanup(() => clearTimeout(release));
   const fill = () => focused() ? palette.accent : props.primary ? palette.foreground : props.selected && props.selectionFill !== false ? 0x71859b66 : props.quiet ? 0x00000000 : glassColor();
   const dark = () => focused() || !!props.primary;
-  return <view ref={node} width={props.width || 280} height={props.height || 68} skipFocus={off()} autofocus={props.autofocus}
+  return <view ref={node} item={props.item} width={props.width || 280} height={props.height || 68} skipFocus={off()} autofocus={props.autofocus}
     color={fill()} borderRadius={(props.height || 68) / 2}
     border={{ width: props.quiet && !focused() ? 0 : 1, color: focused() ? palette.white : 0xe6f2ff33 }}
     alpha={props.disabled ? 0.4 : 1} scale={reducedMotion() ? 1 : pressed() ? 0.97 : focused() ? 1.035 : 1}
@@ -92,8 +92,8 @@ export function Menu(props: { options: Option[]; title?: string; width?: number;
     <Show when={options().length > rows()}><text skipFocus y={(props.height || 630) - 26} width={props.width || 1200} height={28} fontSize={21} textAlign="right" color={palette.muted}>{`${index() + 1} / ${options().length}`}</text></Show>
   </view>;
 }
-export type PosterTitle = Pick<Title, 'name' | 'poster' | 'backdrop' | 'year'> & { source?: Title['source'] };
-export function Poster(props: { title: PosterTitle; action(): unknown; autofocus?: boolean; onFocus?(node: ElementNode): void; id: string; width?: number; landscape?: boolean; viewing?: Viewing }) {
+export type PosterTitle = Pick<Title, 'name' | 'poster' | 'backdrop' | 'year'> & { source?: Title['source']; initials?: string };
+export function Poster(props: { title: PosterTitle; item?: unknown; action(): unknown; autofocus?: boolean; onFocus?(node: ElementNode): void; id: string; width?: number; landscape?: boolean; viewing?: Viewing }) {
   const src = useArtwork(() => props.landscape ? props.title.backdrop || props.title.poster : props.title.poster);
   let node: ElementNode | undefined; const [focused, setFocused] = createSignal(false);
   const width = () => props.width || 240, imageHeight = () => props.landscape ? width() * 0.5625 : width() * 1.5;
@@ -108,7 +108,7 @@ export function Poster(props: { title: PosterTitle; action(): unknown; autofocus
     setFocused(value);
   };
   onCleanup(() => { const id = (node?.lng as { id?: number } | undefined)?.id; if (id !== undefined) gradientMaskBypass.delete(id); });
-  return <view ref={node} width={width()} height={height()} skipFocus={off()} onEnter={() => { if (!off()) props.action(); return true; }}
+  return <view ref={node} item={props.item ?? props.title} width={width()} height={height()} skipFocus={off()} onEnter={() => { if (!off()) props.action(); return true; }}
     clipping={focused() ? [4, Math.ceil(width() * 0.03) + 3, 4, Math.ceil(width() * 0.03) + 3] : false}
     zIndex={focused() ? 5 : 1} scaleX={reducedMotion() ? 1 : focused() ? 1.06 : 1} scaleY={1}
     transition={{ scaleX: motion.lift }} onFocus={() => { focus(true); if (node) props.onFocus?.(node); }} onBlur={() => focus(false)}>
@@ -120,15 +120,15 @@ function PosterArtwork(props: { title: PosterTitle; src: string; width: number; 
   return <view skipFocus width={width()} height={imageHeight() + 76}>
     <view width={width()} height={imageHeight()} color={palette.panelSolid} borderRadius={18}>
       <Show when={props.src} fallback={<view skipFocus width={width()} height={imageHeight()}>
-        <text skipFocus x={24} y={24} width={width() - 48} height={28} fontSize={18} color={palette.muted}>{props.title.source === 'HIANIME' ? 'ANIME' : props.title.source === 'FLIXTOR' ? 'FLIXTOR' : 'DISCOVERY'}</text>
-        <text skipFocus x={24} y={props.landscape ? 76 : 115} width={width() - 48} height={props.landscape ? 100 : 200} fontFamily="Roboto700" fontSize={props.landscape ? 31 : 32} maxLines={4} color={palette.foreground}>{props.title.name}</text>
-        <text skipFocus x={24} y={imageHeight() - 48} width={width() - 48} height={30} fontSize={21} color={palette.muted}>{props.title.year || (props.title.source === 'HIANIME' ? 'Anime' : props.title.source === 'FLIXTOR' ? 'FlixTor' : '')}</text>
+        <text skipFocus x={24} y={24} width={width() - 48} height={28} fontSize={18} color={palette.muted}>{props.title.initials ? '' : props.title.source === 'HIANIME' ? 'ANIME' : props.title.source === 'FLIXTOR' ? 'FLIXTOR' : 'DISCOVERY'}</text>
+        <text skipFocus x={24} y={props.landscape ? 76 : 115} width={width() - 48} height={props.landscape ? 100 : 200} fontFamily="Roboto700" fontSize={props.title.initials ? 64 : props.landscape ? 31 : 32} maxLines={4} color={palette.foreground}>{props.title.initials || props.title.name}</text>
+        <text skipFocus x={24} y={imageHeight() - 48} width={width() - 48} height={30} fontSize={21} color={palette.muted}>{props.title.initials ? '' : props.title.year || (props.title.source === 'HIANIME' ? 'Anime' : props.title.source === 'FLIXTOR' ? 'FlixTor' : '')}</text>
       </view>}><view skipFocus src={props.src} width={width()} height={imageHeight()} borderRadius={18} imageType="regular" textureOptions={{ resizeMode: { type: 'cover' } }} /></Show>
       <view skipFocus width={width()} height={imageHeight()} borderRadius={18} color={0x00000000} border={{ width: props.focused ? 3 : 0, color: palette.foreground }} />
     </view>
     <Show when={props.viewing}><view skipFocus x={8} y={imageHeight() - 10} width={width() - 16} height={4} color={0xffffff44} borderRadius={2}><view width={(width() - 16) * fraction(props.viewing!)} height={4} color={palette.accent} borderRadius={2} /></view></Show>
-    <Show when={props.src}><text skipFocus y={imageHeight() + 16} width={width()} height={34} fontSize={26} maxLines={1} color={props.focused ? palette.white : palette.foreground}>{props.title.name}</text></Show>
-    <text skipFocus y={imageHeight() + (props.src ? 50 : 18)} width={width()} height={30} fontSize={22} maxLines={1} color={palette.muted}>{props.viewing ? props.viewing.episode ? `Episode ${props.viewing.episode.displayNumber || props.viewing.episode.number} · ${time(Math.max(0, props.viewing.duration - props.viewing.position))} left` : `${time(Math.max(0, props.viewing.duration - props.viewing.position))} left` : props.title.year || ''}</text>
+    <Show when={props.src || props.title.initials}><text skipFocus y={imageHeight() + 16} width={width()} height={34} fontSize={26} maxLines={1} color={props.focused ? palette.white : palette.foreground}>{props.title.name}</text></Show>
+    <text skipFocus y={imageHeight() + (props.src || props.title.initials ? 50 : 18)} width={width()} height={30} fontSize={22} maxLines={1} color={palette.muted}>{props.viewing ? props.viewing.episode ? `Episode ${props.viewing.episode.displayNumber || props.viewing.episode.number} · ${time(Math.max(0, props.viewing.duration - props.viewing.position))} left` : `${time(Math.max(0, props.viewing.duration - props.viewing.position))} left` : props.title.year || ''}</text>
   </view>;
 }
 export function Avatar(props: { index: number; size?: number; locked?: boolean }) {

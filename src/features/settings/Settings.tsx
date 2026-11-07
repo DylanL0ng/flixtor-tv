@@ -22,7 +22,7 @@ export function Settings() {
   const input = async (label: string, current: string, save: (value: string) => Promise<unknown>, secret = false) => { const value = await app.input(label, current, secret); if (value !== null) await save(value); };
   const options = (): Option[] => {
     const s = section();
-    if (!s) return ['Account', 'Profiles', 'Playback', 'Skip segments', 'Updates', 'Display', 'Library'].map(label => ({ id: label, label, action: () => navigate('/settings/' + label.toLowerCase().replace(' segments', '')) }));
+    if (!s) return ['Account', 'Profiles', 'Playback', 'Skip segments', 'Updates', 'Display', 'Library', 'About'].map(label => ({ id: label, label, action: () => navigate('/settings/' + label.toLowerCase().replace(' segments', '')) }));
     if (s === 'account') return [
       { id: 'status', label: 'Refresh account status', action: () => { app.refreshAccount(); app.notify('Checking account…'); } },
       { id: 'pair', label: 'Sign in with phone', action: () => navigate('/pair') },
@@ -63,10 +63,11 @@ export function Settings() {
       { id: 'reset', label: 'Reset screen fit', action: () => run(() => app.repo.change(d => { d.fit = { horizontal: 5, vertical: 5 }; })) },
     ];
     if (s === 'horizontal' || s === 'vertical') return Array.from({ length: 11 }, (_, value) => ({ id: String(value), label: `${value}%`, selected: app.data.fit[s] === value, action: () => run(async () => { await app.repo.change(d => { d.fit[s] = value; }); navigate('/settings/display'); }) }));
+    if (s === 'about') return [{ id: 'tmdb', label: 'Movie metadata and images: TMDB', disabled: true, action() {} }, { id: 'tmdb-notice', label: 'This product uses the TMDB API but is not endorsed or certified by TMDB.', disabled: true, action() {} }];
     if (s === 'library') return [{ id: 'clear', label: 'Clear current profile’s list and viewing history', action: () => setConfirm({ label: 'Clear this profile’s library?', action: () => app.repo.clearLibrary(p().id) }) }];
     return [];
   };
-  const categories = ['Account', 'Profiles', 'Playback', 'Skip segments', 'Updates', 'Display', 'Library'];
+  const categories = ['Account', 'Profiles', 'Playback', 'Skip segments', 'Updates', 'Display', 'Library', 'About'];
   return <>
     <Column width={1728} height={848} gap={28} scroll="none">
       <Row width={1728} height={116} gap={26}>
@@ -80,11 +81,11 @@ export function Settings() {
         </Column>
         <view width={1348} height={680}><Glass width={1348} height={680} radius={30} />
           <view x={30} y={30} width={1288} height={620}>
-            <Show when={section() || 'account'} keyed>{current => <Menu width={1288} height={620} title={current === 'skip' ? 'Skip segments' : String(current).charAt(0).toUpperCase() + String(current).slice(1)} options={section() ? options() : [
+            <Show when={section() === 'about'} fallback={<>            <Show when={section() || 'account'} keyed>{current => <Menu width={1288} height={620} title={current === 'skip' ? 'Skip segments' : String(current).charAt(0).toUpperCase() + String(current).slice(1)} options={section() ? options() : [
               { id: 'account', label: accountLabel(), action: () => navigate('/settings/account') },
               { id: 'pair', label: 'Sign in with phone', action: () => navigate('/pair') },
               { id: 'refresh', label: 'Refresh account status', action: () => app.refreshAccount() },
-            ]} back={() => navigate(section() ? '/settings' : '/home')} />}</Show>
+            ]} back={() => navigate(section() ? '/settings' : '/home')} />}</Show></>}><Column width={1288} height={620} gap={32} scroll="none"><text skipFocus width={1200} height={60} fontSize={42} fontFamily="Roboto700">About movie discovery</text><view skipFocus src="./tmdb.svg" imageType="svg" width={300} height={39} /><text skipFocus width={1200} height={60} fontSize={28}>Movie metadata and images by TMDB.</text><text skipFocus width={1200} height={150} fontSize={28} maxLines={4}>This product uses the TMDB API but is not endorsed or certified by TMDB.</text><Button label="Back to settings" autofocus action={() => navigate('/settings')} /></Column></Show>
           </view>
         </view>
       </Row>

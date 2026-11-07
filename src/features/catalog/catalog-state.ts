@@ -1,7 +1,7 @@
 import { episodeKey, finished, orderedEpisodes, titleKey, type Detail, type Title, type Viewing } from '../../domain/models';
 
-export type SearchMode = 'media' | 'anime';
-export function searchMode(value: unknown): SearchMode { return value === 'anime' ? 'anime' : 'media'; }
+export type SearchMode = 'media' | 'anime' | 'people' | 'studios';
+export function searchMode(value: unknown): SearchMode { return value === 'anime' || value === 'people' || value === 'studios' ? value : 'media'; }
 export function catalogueKey(destination: string, query: string, sort: string, profile: string, auth: number, mode: SearchMode = 'media') {
   const key = ['catalog', destination, query, sort, profile, auth] as const;
   return destination === 'search' ? [...key, mode] as const : key;

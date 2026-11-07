@@ -68,7 +68,7 @@ internal class NativeCapabilities(private val activity: Activity, private val pl
     }
     fun call(id: String, method: String, args: JSONObject, reply: (JSONObject) -> Unit) {
         fun done(value: Any? = JSONObject.NULL, error: String? = null) {
-            activity.runOnUiThread { reply(JSONObject().put("v", 1).put("id", id).apply {
+            activity.runOnUiThread { if (!activity.isFinishing && !activity.isDestroyed) reply(JSONObject().put("v", 1).put("id", id).apply {
                 if (error != null) put("error", error) else put("value", value)
             }) }
         }
@@ -80,12 +80,13 @@ internal class NativeCapabilities(private val activity: Activity, private val pl
                 done(error = "MEDIA")
             }; return
         }
+        if (pool.isShutdown) return
         pool.execute {
             try {
                 val result: Any? = when (method) {
                     "ready" -> JSONObject().put("version", BuildConfig.VERSION_NAME).put("versionCode", BuildConfig.VERSION_CODE).put("sdk", android.os.Build.VERSION.SDK_INT)
                         .put("commit", BuildConfig.COMMIT_SHA).put("reportUrl", BuildConfig.REPORT_URL)
-                        .put("contribution", BuildConfig.INTRODB_API_KEY.isNotBlank()).put("platform", "android")
+                        .put("voice", ((activity as? SolidTvActivity)?.voiceAvailable() == true)).put("tmdb", BuildConfig.TMDB_TOKEN.isNotBlank()).put("contribution", BuildConfig.INTRODB_API_KEY.isNotBlank()).put("platform", "android")
                     "http" -> http(id, args)
                     "storage.get" -> prefs.getString(validKey(args), null) ?: JSONObject.NULL
                     "storage.set" -> { val value = args.getString("value"); require(value.length <= 2_000_000); check(prefs.edit().putString(validKey(args), value).commit()); true }
@@ -147,14 +148,19 @@ internal class NativeCapabilities(private val activity: Activity, private val pl
             }
             return JSONObject().put("status", 200).put("body", if (key.isEmpty()) "{}" else fixtures.getString(key)).put("location", "")
         }
-        val url = validateUrl(args.getString("url"))
+        var url = validateUrl(args.getString("url"))
         val scope = args.getString("client")
-        require(scope in listOf("flixtor", "anime", "introdb", "aniskip", "updates", "report", "public"))
+        require(scope in listOf("flixtor", "anime", "introdb", "aniskip", "updates", "report", "public", "tmdb"))
         if (scope == "flixtor") require(url.host == "flixtor.to")
         if (scope == "introdb") require(url.host == "api.introdb.app")
         if (scope == "aniskip") require(url.host == "api.aniskip.com")
         if (scope == "report") require(BuildConfig.REPORT_URL.isNotBlank() && url.toString() == BuildConfig.REPORT_URL)
+        if (scope == "tmdb") require(url.host == "api.themoviedb.org" && BuildConfig.TMDB_TOKEN.isNotBlank())
         val builder = Request.Builder().url(url)
+        if (scope == "tmdb") {
+            if (BuildConfig.TMDB_TOKEN.contains(".")) builder.header("Authorization", "Bearer ${BuildConfig.TMDB_TOKEN}")
+            else { url = url.newBuilder().addQueryParameter("api_key", BuildConfig.TMDB_TOKEN).build(); builder.url(url) }
+        }
         val headers = args.optJSONObject("headers") ?: JSONObject()
         headers.keys().forEach { name -> require(name.lowercase() !in listOf("cookie", "host", "authorization", "set-cookie")); builder.header(name, headers.getString(name)) }
         if (scope == "introdb" && url.encodedPath == "/submit") {
@@ -162,7 +168,7 @@ internal class NativeCapabilities(private val activity: Activity, private val pl
         }
         val method = args.optString("method", "GET"); require(method in listOf("GET", "POST"))
         if (method == "POST") builder.post(args.optString("body").toRequestBody(headers.optString("Content-Type", "application/json").toMediaType()))
-        val call = (if (scope == "flixtor") authenticated else public).newCall(builder.build()); calls[id] = call
+        val call = (if (scope == "flixtor") authenticated else if (scope == "tmdb") public.newBuilder().followRedirects(false).build() else public).newCall(builder.build()); calls[id] = call
         try { return call.execute().use { r ->
             val body = r.body ?: throw IllegalStateException("Missing body")
             require(body.contentLength() <= 8_388_608)

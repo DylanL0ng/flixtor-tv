@@ -1,6 +1,7 @@
 // Lucide SVG paths from lucide-static@1.61.0, ISC license.
-export type IconName = 'play' | 'pause' | 'back' | 'search' | 'settings' | 'plus' | 'check' | 'lock' | 'person' | 'episodes' | 'rewind' | 'forward' | 'close' | 'chevron' | 'delete' | 'home' | 'film' | 'tv' | 'anime' | 'list' | 'library' | 'favorite';
+export type IconName = 'microphone' | 'play' | 'pause' | 'back' | 'search' | 'settings' | 'plus' | 'check' | 'lock' | 'person' | 'episodes' | 'rewind' | 'forward' | 'close' | 'chevron' | 'delete' | 'home' | 'film' | 'tv' | 'anime' | 'list' | 'library' | 'favorite';
 const paths: Record<IconName, string> = {
+  microphone: '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8"/>',
   play: "<path d=\"M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z\" />",
   pause: "<rect x=\"14\" y=\"3\" width=\"5\" height=\"18\" rx=\"1\" /> <rect x=\"5\" y=\"3\" width=\"5\" height=\"18\" rx=\"1\" />",
   back: "<path d=\"m12 19-7-7 7-7\" /> <path d=\"M19 12H5\" />",

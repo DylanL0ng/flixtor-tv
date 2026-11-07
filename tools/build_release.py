@@ -11,6 +11,15 @@ private.mkdir(parents=True, exist_ok=True, mode=0o700)
 private.chmod(0o700)
 config = private / "signing.json"
 env = os.environ.copy()
+# Local build settings never enter tracked source.
+local_env = root / ".env"
+if local_env.exists():
+    import shlex
+    for line in local_env.read_text().splitlines():
+        if line.startswith("TV_") and "=" in line:
+            name, value = line.split("=", 1)
+            parsed = shlex.split(value, comments=True)
+            env.setdefault(name, parsed[0] if parsed else "")
 if not env.get("JAVA_HOME"):
     java_home = Path("/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home")
     if java_home.exists():

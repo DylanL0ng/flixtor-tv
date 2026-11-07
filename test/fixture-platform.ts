@@ -1,3 +1,5 @@
+import { catalogFixture } from './catalog-fixture';
+import { tmdbFixture } from './tmdb-fixtures';
 import fixtures from './fixtures/http.json';
 import type { Platform, PlatformEvent, PlayerEvent } from '../src/platform/platform';
 import { deviceInput } from '../src/ui/device-input';
@@ -17,7 +19,8 @@ export function fixturePlatform(): Platform {
   async function call<T>(method: string, args: Record<string, unknown> = {}, signal?: AbortSignal): Promise<T> {
     if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
     let value: unknown = null;
-    if (method === 'ready') value = { platform: 'browser-fixture', version: 'development', versionCode: 2, sdk: 34, commit: 'fixture', reportUrl: '', contribution: false };
+    if (method === 'voice.search') { const response = JSON.parse(localStorage.getItem('flixtor-fixture:voice') || 'null'); if (response?.delay) await new Promise(resolve => setTimeout(resolve, response.delay)); signal?.throwIfAborted(); return (response?.text || null) as T; }
+    if (method === 'ready') value = { platform: 'browser-fixture', version: 'development', versionCode: 2, sdk: 34, commit: 'fixture', reportUrl: '', contribution: false, tmdb: localStorage.getItem('flixtor-fixture:tmdb') === 'true', voice: localStorage.getItem('flixtor-fixture:voice') !== null };
     else if (method === 'storage.get') value = localStorage.getItem('flixtor-fixture:' + args.key);
     else if (method === 'storage.set') localStorage.setItem('flixtor-fixture:' + args.key, String(args.value));
     else if (method === 'storage.remove') localStorage.removeItem('flixtor-fixture:' + args.key);
@@ -43,7 +46,7 @@ export function fixturePlatform(): Platform {
           : catalog === 'imdbRating' ? [{ id: 'tt1234569', type, name: 'The Test Series', releaseInfo: '2026', poster: 'https://image.tmdb.org/t/p/w500/series.jpg', background: 'https://image.tmdb.org/t/p/original/series-bg.jpg', genres: ['Drama'], description: 'A fixture series.', imdbRating: '8.4' }] : [{ id: 'tt1234569', type, name: 'The Test Series', releaseInfo: '2026', poster: 'https://image.tmdb.org/t/p/w500/series.jpg', background: 'https://image.tmdb.org/t/p/original/series-bg.jpg', genres: ['Drama'], description: 'A fixture series.', imdbRating: '8.4' }];
         return JSON.stringify({ metas });
       })() : undefined;
-      const body = discovery ?? (args.client === 'anime' ? path.includes('/episode/list/') ? fixtures.animeEpisodes : path.includes('/episode/servers') ? fixtures.animeServers : path.includes('/mal/') ? fixtures.animeEmbed : ['/most-popular', '/top-airing', '/recently-updated', '/search'].includes(path) ? fixtures.anime : fixtures.animeDetail : entries[path] ?? (path.startsWith('/ajax/v4/') ? fixtures.stream : path.startsWith('/watch/') ? fixtures.detail : path.startsWith('/show/') || args.client === 'flixtor' && path.startsWith('/search/') ? fixtures.catalog : '{}'));
+      const body = (args.client === 'tmdb' ? JSON.stringify(tmdbFixture(path, url.searchParams)) : undefined) ?? discovery ?? (args.client === 'anime' ? path.includes('/episode/list/') ? fixtures.animeEpisodes : path.includes('/episode/servers') ? fixtures.animeServers : path.includes('/mal/') ? fixtures.animeEmbed : ['/most-popular', '/top-airing', '/recently-updated', '/search'].includes(path) ? fixtures.anime : fixtures.animeDetail : entries[path] ?? (path.startsWith('/ajax/v4/') ? fixtures.stream : path.startsWith('/watch/movie/') ? fixtures.detail.replaceAll('class=eplist', 'class=fixture-episode') : path.startsWith('/watch/') ? fixtures.detail : path.startsWith('/show/') ? catalogFixture(fixtures.catalog, url.searchParams.get('sort'), url.searchParams.get('page')) : args.client === 'flixtor' && path.startsWith('/search/') ? fixtures.catalog : '{}'));
       value = { status: 200, body, location: '' };
     } else if (method === 'player.load') player = { ...player, id: String(args.id), position: Number(args.position || 0), playing: args.play !== false, playRequested: args.play !== false, error: undefined, ended: false, time: performance.now() };
     else if (method === 'player.command' && args.id === player.id) {

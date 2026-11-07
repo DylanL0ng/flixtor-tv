@@ -4,7 +4,7 @@ import { BlockList, isIP } from 'node:net';
 import { request } from 'node:https';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { CookieJar } from 'tough-cookie';
-import type { Plugin } from 'vite';
+import { loadEnv, type Plugin } from 'vite';
 import type { HttpRequest } from '../src/platform/platform.ts';
 
 const PREFIX = '/__platform';
@@ -24,9 +24,9 @@ export function publicUrl(value: string) {
 }
 function scopeUrl(value: string, client: HttpRequest['client']) {
   const url = publicUrl(value);
-  const hosts: Partial<Record<HttpRequest['client'], string>> = { flixtor: 'flixtor.to', introdb: 'api.introdb.app', aniskip: 'api.aniskip.com', updates: 'github.com' };
+  const hosts: Partial<Record<HttpRequest['client'], string>> = { flixtor: 'flixtor.to', introdb: 'api.introdb.app', aniskip: 'api.aniskip.com', tmdb: 'api.themoviedb.org', updates: 'github.com' };
   const host = hosts[client];
-  if (!['flixtor', 'anime', 'introdb', 'aniskip', 'updates', 'public'].includes(client) || host && url.hostname !== host) throw new Error('ACCESS');
+  if (!['flixtor', 'anime', 'introdb', 'aniskip', 'updates', 'public', 'tmdb'].includes(client) || host && url.hostname !== host) throw new Error('ACCESS');
   return url;
 }
 function safeHeaders(value: Record<string, string> = {}) {
@@ -54,10 +54,12 @@ export function rewritePlaylist(text: string, base: string, asset: (url: string)
 /** Loopback-only development transport. Service cookies never enter browser storage or JS. */
 export function browserBridge(): Plugin {
   const sessions = new Map<string, Session>();
+  const tmdbToken = process.env.TV_TMDB_TOKEN || loadEnv('development', process.cwd(), 'TV_').TV_TMDB_TOKEN;
   async function open(url: URL, args: HttpRequest, session: Session, signal: AbortSignal): Promise<IncomingMessage> {
     const addresses = await lookup(url.hostname, { all: true });
     if (!addresses.length || addresses.some(a => !publicAddress(a.address))) throw new Error('ACCESS');
     const headers = safeHeaders(args.headers);
+    if (args.client === 'tmdb') { if (url.hostname !== 'api.themoviedb.org' || !tmdbToken) throw new Error('TMDB is not configured'); if (tmdbToken.includes('.')) headers.Authorization = `Bearer ${tmdbToken}`; else url.searchParams.set('api_key', tmdbToken); }
     if (args.client === 'flixtor') {
       const cookie = await session.jar.getCookieString(url.href); if (cookie) headers.Cookie = cookie;
     }
@@ -123,6 +125,7 @@ export function browserBridge(): Plugin {
         if (req.headers['x-flixtor-request'] !== '1') { res.writeHead(403); res.end(); return; }
         const { method, args = {} } = JSON.parse((await bounded(req, 2_000_000)).toString());
         let value: unknown;
+        if (method === 'tmdb.available') { res.end(JSON.stringify({ value: !!tmdbToken })); return; }
         if (method === 'session.open') value = true;
         else if (method === 'http') {
           const input = args as HttpRequest, url = scopeUrl(input.url, input.client);

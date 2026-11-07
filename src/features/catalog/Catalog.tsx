@@ -15,8 +15,12 @@ import { narratePage } from '../../ui/narration';
 import { CINEMETA_TTL, matchPlayableTitle, type DiscoveryTitle } from '../../services/cinemeta';
 
 import { CatalogShelves, isDiscovery, shelfTitleKey as homeKey, type ShelfTitle as HomeTitle } from './CatalogShelves';
+import { TitleGrid } from './TitleGrid';
+import { EntityResults, movieRoute } from './Discovery';
+import { METADATA_TTL } from '../../services/tmdb';
 import { BrowseShelves } from './BrowseShelves';
-type HomeShelf = { label: string; titles: HomeTitle[]; continuing?: boolean };
+type HomeShelf = { id: string; label: string; titles: HomeTitle[]; continuing?: boolean };
+const genreIds: Record<string, number> = { Action: 28, Adventure: 12, Animation: 16, Comedy: 35, Crime: 80, Documentary: 99, Drama: 18, Family: 10751, Fantasy: 14, History: 36, Horror: 27, Mystery: 9648, Romance: 10749, 'Sci-Fi': 878, Thriller: 53, War: 10752, Western: 37 };
 const genres = ['Action', 'Adventure', 'Animation', 'Biography', 'Comedy', 'Crime', 'Documentary', 'Drama', 'Family', 'Fantasy', 'History', 'Horror', 'Mystery', 'Romance', 'Sci-Fi', 'Thriller', 'War', 'Western'];
 
 
@@ -24,46 +28,54 @@ export function Catalog() {
   const app = useApp(), location = useLocation(), navigate = useNavigate(); const [params, setParams] = useSearchParams();
   const destination = () => location.pathname.slice(1) || 'home', query = () => String(params.q || '').slice(0, 64), sort = () => String(params.sort || 'latest');
   const mode = () => searchMode(params.mode);
-  const filterKey = () => JSON.stringify(catalogueKey(destination(), query(), sort(), app.profileId(), app.authRevision(), mode()));
+  const filterKey = () => String(params.shelf || '') + String(params.genre || '') + JSON.stringify(catalogueKey(destination(), query(), sort(), app.profileId(), app.authRevision(), mode()));
   function changeSearch(value: string, next: SearchMode = mode(), replace = true) {
     if (value !== query() || next !== mode()) {
       app.browseOrigins.delete(JSON.stringify(catalogueKey('search', value, sort(), app.profileId(), app.authRevision(), next)));
     }
-    setParams({ mode: next === 'anime' ? 'anime' : undefined, q: value || undefined, page: undefined }, { replace });
+    setParams({ mode: next === 'media' ? undefined : next, q: value || undefined, page: undefined }, { replace });
   }
   narratePage(() => destination() === 'search' ? 'Search' : destination() === 'home' ? 'Home' : destination() === 'shows' ? 'TV shows' : destination() === 'list' ? 'My List' : destination() === 'continue' ? 'Continue Watching' : destination() === 'anime' ? 'Anime' : 'Movies');
   const [sortMenu, setSortMenu] = createSignal(false);
   const home = createQuery(() => ({ queryKey: ['home', app.profileId(), app.authRevision()], enabled: destination() === 'home', queryFn: ({ signal }) => app.flixtor.home(signal), retry: 1 }));
+  const trending = createQuery(() => ({ queryKey: ['tmdb', 'trending'], enabled: destination() === 'home' && !!app.host.tmdb, staleTime: METADATA_TTL, retry: false, queryFn: ({ signal }) => app.tmdb.movies({ shelf: 'trending', page: 1 }, signal) }));
+  const topRated = createQuery(() => ({ queryKey: ['tmdb', 'rated'], enabled: destination() === 'home' && !!app.host.tmdb, staleTime: METADATA_TTL, retry: false, queryFn: ({ signal }) => app.tmdb.movies({ shelf: 'rated', page: 1 }, signal) }));
   const popularMovies = createQuery(() => ({ queryKey: ['discovery', 'movie', 'top'], enabled: destination() === 'home', queryFn: ({ signal }) => app.cinemeta.catalog('movie', 'top', undefined, signal), staleTime: CINEMETA_TTL, retry: false }));
   const featuredMovies = createQuery(() => ({ queryKey: ['discovery', 'movie', 'imdbRating'], enabled: destination() === 'home', queryFn: ({ signal }) => app.cinemeta.catalog('movie', 'imdbRating', undefined, signal), staleTime: CINEMETA_TTL, retry: false }));
   const popularSeries = createQuery(() => ({ queryKey: ['discovery', 'series', 'top'], enabled: destination() === 'home', queryFn: ({ signal }) => app.cinemeta.catalog('series', 'top', undefined, signal), staleTime: CINEMETA_TTL, retry: false }));
   const featuredSeries = createQuery(() => ({ queryKey: ['discovery', 'series', 'imdbRating'], enabled: destination() === 'home', queryFn: ({ signal }) => app.cinemeta.catalog('series', 'imdbRating', undefined, signal), staleTime: CINEMETA_TTL, retry: false }));
   const categoryBrowse = () => ['movies', 'shows', 'anime'].includes(destination());
-  const [genre, setGenre] = createSignal(''), [genreMenu, setGenreMenu] = createSignal(false);
+  const genre = () => genres.includes(String(params.genre)) ? String(params.genre) : '';
+  const setGenre = (value: string) => setParams({ genre: value || undefined });
+  const [genreMenu, setGenreMenu] = createSignal(false);
   const genreMovies = createQuery(() => ({ queryKey: ['discovery', 'movie', 'genre', genre()], enabled: destination() === 'home' && !!genre(), queryFn: ({ signal }) => app.cinemeta.catalog('movie', 'top', genre(), signal), staleTime: CINEMETA_TTL, retry: false }));
   const genreSeries = createQuery(() => ({ queryKey: ['discovery', 'series', 'genre', genre()], enabled: destination() === 'home' && !!genre(), queryFn: ({ signal }) => app.cinemeta.catalog('series', 'top', genre(), signal), staleTime: CINEMETA_TTL, retry: false }));
   const remote = createInfiniteQuery(() => ({
     queryKey: catalogueKey(destination(), query(), sort(), app.profileId(), app.authRevision(), mode()),
     initialPageParam: 1, maxPages: 8,
-    enabled: destination() === 'search' && !!query().trim(),
+    enabled: destination() === 'search' && ['media', 'anime'].includes(mode()) && !!query().trim(),
     queryFn: ({ pageParam, signal }) => mode() === 'anime' ? app.anime.browse(query(), pageParam, signal) : app.flixtor.search(query(), pageParam, signal),
     getNextPageParam: (last, pages, page) => nextCataloguePage(last, pages, page),
     retry: (count, error) => failureOf(error) === 'NETWORK' && count < 1,
   }));
   const library = () => app.data.libraries[app.profileId()];
   const continuing = () => library()?.viewing.filter(v => !finished(v)) || [];
+  const seed = () => library()?.viewing.filter(v => v.title.source !== 'HIANIME' && v.title.type !== 'SERIES' && !v.title.path.startsWith('/watch/tv/')).at(0)?.title;
+  const seedMovie = createQuery(() => ({ queryKey: ['tmdb', 'seed', app.profileId(), seed()?.imdb, seed()?.name, seed()?.year], enabled: destination() === 'home' && !!app.host.tmdb && !!seed(), staleTime: METADATA_TTL, retry: false, queryFn: ({ signal }) => app.tmdb.identify(seed()!, signal) }));
+  const similar = createQuery(() => ({ queryKey: ['tmdb', 'similar', app.profileId(), seedMovie.data?.tmdbId], enabled: destination() === 'home' && !!seedMovie.data, staleTime: METADATA_TTL, retry: false, queryFn: ({ signal }) => app.tmdb.movies({ shelf: 'similar', movie: seedMovie.data!.tmdbId, page: 1 }, signal) }));
   const discoveryQueries = () => [popularMovies, featuredMovies, popularSeries, featuredSeries];
   const discoveryLoading = () => discoveryQueries().some(query => query.isPending);
   const shelves = createMemo<HomeShelf[]>(() => {
-    const resume: HomeShelf[] = continuing().length ? [{ label: 'Continue Watching', titles: distinctTitles([continuing().map(v => v.title)]), continuing: true }] : [];
+    const resume: HomeShelf[] = continuing().length ? [{ id: 'continue', label: 'Continue Watching', titles: distinctTitles([continuing().map(v => v.title)]), continuing: true }] : [];
     const curated: HomeShelf[] = [
-      { label: 'Popular Movies', titles: popularMovies.data || [] },
-      { label: 'Featured Movies', titles: featuredMovies.data || [] },
-      { label: 'Popular Series', titles: popularSeries.data || [] },
-      { label: 'Featured Series', titles: featuredSeries.data || [] },
-      ...(genre() ? [{ label: `${genre()} Movies`, titles: genreMovies.data || [] }, { label: `${genre()} Series`, titles: genreSeries.data || [] }] : []),
+      { id: 'movies-popular', label: trending.data?.titles.length ? 'Trending Movies' : 'Popular Movies', titles: trending.data?.titles.length ? trending.data.titles : popularMovies.data || [] },
+      { id: 'movies-rated', label: topRated.data?.titles.length ? 'Top Rated Movies' : 'Featured Movies', titles: topRated.data?.titles.length ? topRated.data.titles : featuredMovies.data || [] },
+      ...(similar.data?.titles.length ? [{ id: 'movies-similar', label: `More like ${seed()?.name}`, titles: similar.data.titles }] : []),
+      { id: 'series-popular', label: 'Popular Series', titles: popularSeries.data || [] },
+      { id: 'series-featured', label: 'Featured Series', titles: featuredSeries.data || [] },
+      ...(genre() ? [{ id: 'genre-movies', label: `${genre()} Movies`, titles: genreMovies.data || [] }, { id: 'genre-series', label: `${genre()} Series`, titles: genreSeries.data || [] }] : []),
     ].filter(shelf => shelf.titles.length);
-    const fallback = !curated.length ? (home.data || []).map(shelf => ({ ...shelf })) : [];
+    const fallback = !curated.length ? (home.data || []).map(shelf => ({ ...shelf, id: `provider:${shelf.label}` })) : [];
     return [...resume, ...(curated.length ? curated : fallback)];
   });
   const titles = createMemo(() => destination() === 'list' ? library()?.favorites || [] : destination() === 'continue' ? distinctTitles([continuing().map(v => v.title)]) : distinctTitles(remote.data?.pages || []));
@@ -97,27 +109,16 @@ export function Catalog() {
     app.lastFocus = focus; navigate(`/detail?title=${encodeURIComponent(titleKey(title))}`);
   }
   async function openDiscovery(item: DiscoveryTitle, focus: string) {
-    availabilityRequest?.abort();
-    const request = new AbortController(); availabilityRequest = request;
-    setAvailabilityFailure(undefined); setCheckingId(homeKey(item)); setAvailabilityMessage('Checking FlixTor availability…');
-    try {
-      const candidates = await app.flixtor.search(item.name, 1, request.signal);
-      if (request.signal.aborted) return;
-      const match = matchPlayableTitle(item, candidates);
-      if (match) {
-        setAvailabilityMessage('');
-        open({ ...match, poster: match.poster || item.poster, backdrop: match.backdrop || item.backdrop, synopsis: match.synopsis || item.synopsis }, focus);
-      }
-      else setAvailabilityMessage(`${item.name} is not available on FlixTor.`);
-    } catch (error) {
-      if (!request.signal.aborted) {
-        setAvailabilityMessage('');
-        setAvailabilityFailure({ id: 'availability', error, retry: () => openDiscovery(item, focus) });
-      }
-    } finally {
-      if (availabilityRequest === request) { availabilityRequest = undefined; setCheckingId(''); }
-    }
+    if (app.host.tmdb && item.type === 'movie') { app.lastFocus = focus; navigate(movieRoute(item)); return; }
+    availabilityRequest?.abort(); const request = new AbortController(); availabilityRequest = request;
+    setCheckingId(homeKey(item)); setAvailabilityMessage('Checking FlixTor availability…');
+    try { const candidates = await app.queries.fetchQuery({ queryKey: ['availability', 'cinemeta', item.id, item.name, item.year, item.type, app.profileId(), app.authRevision()], queryFn: ({ signal }) => app.flixtor.search(item.name, 1, request.signal) });
+      if (request.signal.aborted) return; const match = matchPlayableTitle(item, candidates);
+      if (match) { setAvailabilityMessage(''); open(match, focus); } else setAvailabilityMessage(`${item.name} is not available on FlixTor.`);
+    } catch (error) { if (!request.signal.aborted) setAvailabilityFailure({ id: 'availability', error, retry: () => openDiscovery(item, focus) }); }
+    finally { if (availabilityRequest === request) { availabilityRequest = undefined; setCheckingId(''); } }
   }
+
   function chooseHomeTitle(item: HomeTitle, focus: string) {
     if (isDiscovery(item)) void app.run(() => openDiscovery(item, focus));
     else open(item, focus);
@@ -158,8 +159,9 @@ export function Catalog() {
       const heading = () => (
           <Row width={1728} height={82} gap={24} skipFocus={!['movies', 'shows'].includes(destination())}
             onUp={() => restoreFocus(`nav-${destination() === 'continue' ? 'home' : destination()}`)}>
-            <text skipFocus width={1100} height={76} fontSize={54} fontFamily="Roboto700" maxLines={1}>{destination() === 'shows' ? 'TV shows' : destination() === 'list' ? 'My List' : destination() === 'continue' ? 'Continue Watching' : destination() === 'anime' ? 'Anime' : 'Movies'}</text>
-            <Show when={['movies', 'shows'].includes(destination())}><Button label={sort() === 'best' ? 'Top rated' : sort() === 'name' ? 'A–Z' : 'Latest'} width={220} action={() => setSortMenu(true)} /></Show>
+            <text skipFocus width={800} height={76} fontSize={54} fontFamily="Roboto700" maxLines={1}>{destination() === 'shows' ? 'TV shows' : destination() === 'list' ? 'My List' : destination() === 'continue' ? 'Continue Watching' : destination() === 'anime' ? 'Anime' : 'Movies'}</text>
+            <Show when={['movies', 'shows'].includes(destination())}><Button id="catalog-sort" label={sort() === 'best' ? 'Top rated' : sort() === 'name' ? 'A–Z' : 'Latest'} width={220} action={() => setSortMenu(true)} /></Show>
+            <Show when={destination() === 'movies' && app.host.tmdb}><Button label="Explore genres" width={280} action={() => setGenreMenu(true)} /></Show>
             <Show when={delayed() && destination() !== 'search'}><text skipFocus width={280} height={54} fontSize={24} color={palette.muted}>{remote.isFetchingNextPage ? 'Loading more…' : 'Refreshing…'}</text></Show>
           </Row>
       );
@@ -182,12 +184,12 @@ export function Catalog() {
           </Show>
 
           </>}>
-            <BrowseShelves header={heading()} destination={destination()} sort={sort()} query={query()} prefix={key} origin={origin}
+            <BrowseShelves full={String(params.shelf || '')} header={heading()} destination={destination()} sort={sort()} query={query()} prefix={key} origin={origin}
               viewing={continuing()} focus={shelfFocus} open={open} />
           </Show>
         </Column>
       }>
-        <CatalogShelves shelves={shelves().map(shelf => ({ ...shelf, id: shelf.label, viewAll: () => navigate('/continue') }))}
+        <CatalogShelves shelves={shelves().map(shelf => ({ ...shelf, viewAll: shelf.continuing ? () => navigate('/continue') : undefined }))}
           prefix={key} height={848} origin={origin} viewing={continuing()} focus={shelfFocus} open={chooseHomeTitle} header={<>
           <Column width={1728} height={availabilityMessage() ? 560 : 456} gap={18} scroll="none">
             <Show when={hero()} fallback={<text skipFocus width={950} height={150} fontSize={76} fontFamily="Roboto700">Welcome, {app.profile()?.name || 'FlixTor'}</text>}>{selectedHero => {
@@ -210,7 +212,7 @@ export function Catalog() {
                   })} />
                   <Button id="hero-details" label="Details" width={220} action={() => open(playable!, focusId(0, playable!))} />
                 </>}>
-                  {item => <Button id="hero-find" label={checkingId() === homeKey(item()) ? 'Checking…' : 'Find on FlixTor'} icon="play" primary autofocus={!origin} width={290} disabled={!!checkingId()} action={() => void app.run(() => openDiscovery(item(), focusId(0, item())))} />}
+                  {item => <Button id="hero-find" label="Details" icon="play" primary autofocus={!origin} width={290} disabled={!!checkingId()} action={() => void app.run(() => openDiscovery(item(), focusId(0, item())))} />}
                 </Show>
                 <Button label={genre() ? `Genre: ${genre()}` : 'Browse genres'} icon="film" width={290} action={() => setGenreMenu(true)} />
                 <Show when={home.isError}><Button label="Refresh catalogue" action={() => void home.refetch()} /></Show>
@@ -227,46 +229,34 @@ export function Catalog() {
     <ContentError screenKey={filterKey()} operations={recoveryOperations()} />
     <Show when={sortMenu()}><Overlay title="Sort titles" close={() => setSortMenu(false)} width={700} height={510}><Menu width={620} height={438} title="Sort titles" options={[
       ['latest', 'Latest'], ['best', 'Top rated'], ['name', 'A–Z'],
-    ].map(([value, label]) => ({ id: value, label, selected: sort() === value, action: () => { setSortMenu(false); setParams({ sort: value, page: undefined, window: undefined }); } }))} /></Overlay></Show>
+    ].map(([value, label]) => ({ id: value, label, selected: sort() === value, action: () => { setSortMenu(false); setParams({ sort: value, shelf: params.shelf ? value : undefined, page: undefined, window: undefined }); } }))} /></Overlay></Show>
     <Show when={genreMenu()}><Overlay title="Discover by genre" close={() => setGenreMenu(false)} width={760} height={740}><Menu width={680} height={660} title="Discover by genre" back={() => setGenreMenu(false)} options={[
       { id: 'all', label: 'All genres', selected: !genre(), action: () => { setGenre(''); setGenreMenu(false); } },
-      ...genres.map(value => ({ id: value, label: value, selected: genre() === value, action: () => { setGenre(value); setGenreMenu(false); } })),
+      ...genres.filter(value => destination() !== 'movies' || genreIds[value]).map(value => ({ id: value, label: value, selected: genre() === value, action: () => { setGenreMenu(false); if (destination() === 'movies') navigate(`/discover?genre=${genreIds[value]}&name=${encodeURIComponent(value + ' movies')}`); else setGenre(value); } })),
     ]} /></Overlay></Show>
   </>;
 }
 
-function TitleGrid(props: { header?: JSX.Element; up?(): boolean; titles: Title[]; prefix: string; columns: number; width: number; height: number; initial?: number; autofocus?: boolean; viewing?: Viewing[]; focus?(title: Title, index: number): void; open(title: Title): void; end(): void }) {
-  const cardWidth = () => (props.width - (props.columns - 1) * 28 - 16) / props.columns;
-  const rowGap = 28;
-  const rowHeight = () => cardWidth() * 1.5 + 78;
-  const visibleRows = () => Math.max(1, Math.floor((props.height - 20 + rowGap) / (rowHeight() + rowGap)));
-  // The heading occupies a virtual row so one owner scrolls headings and media.
-  const headings = Array.from({ length: props.columns }, (_, column) => ({ heading: true as const, column }));
-  const headerCount = () => props.header ? props.columns : 0;
-  const items = createMemo(() => props.header ? [...headings, ...props.titles] : props.titles);
-  const [focusedIndex, setFocusedIndex] = createSignal(props.initial || 0);
-  const viewportHeight = () => props.header ? props.height : visibleRows() * rowHeight() + (visibleRows() - 1) * rowGap + 20;
-  return <view width={props.width} height={viewportHeight()} clipping={[20, 20, 20, 20]} forwardFocus={0}>
-    <VirtualGrid each={items()} x={8} y={10} width={props.width - 16} height={viewportHeight() - 20} gap={rowGap} columns={props.columns} rows={visibleRows()} buffer={1} scroll="always" offset={10} selected={focusedIndex() + headerCount()} wrap={false}
-      onUp={() => !!props.header && focusedIndex() < props.columns && !!props.up?.()}
-      onEndReachedThreshold={props.columns * 2} onEndReached={props.end}>
-      {item => <Show when={'heading' in item() ? undefined : item() as Title} fallback={
-        <view skipFocus width={cardWidth()} height={82}>{(item() as typeof headings[number]).column === 0 ? props.header : undefined}</view>
-      }>{title => {
-        const index = () => props.titles.findIndex(value => titleKey(value) === titleKey(title()));
-        return <Poster title={title()} width={cardWidth()} id={`${props.prefix}:0:${titleKey(title())}`} viewing={props.viewing && resumeViewing(props.viewing, title())}
-          autofocus={props.autofocus !== false && (props.initial || 0) === index()} action={() => props.open(title())}
-          onFocus={() => { const selected = index(); setFocusedIndex(selected); props.focus?.(title(), selected); if (selected >= props.titles.length - props.columns * 2) props.end(); }} />;
-      }}</Show>}
-    </VirtualGrid>
-  </view>;
-}
+
 function SearchResults(props: { mode: SearchMode; switchMode(mode: SearchMode, query: string): void; query: string; change(value: string): void; titles: Title[]; pending: boolean; error: unknown; retry(): void; prefix: string; initial: number; restore: boolean; focus(title: Title, index: number): void; open(title: Title): void; end(): void }) {
-  const app = useApp(); const [draft, setDraft] = createSignal(props.query);
+  const app = useApp(), location = useLocation(); const [draft, setDraft] = createSignal(props.query);
+  const [listening, setListening] = createSignal(false);
+  let voice: AbortController | undefined;
+  const voiceKey = () => JSON.stringify([props.mode, app.profileId(), location.pathname, draft()]);
+  createEffect(on(() => [props.mode, app.profileId(), location.pathname, props.query], () => { voice?.abort(); setListening(false); }));
+  onCleanup(() => voice?.abort());
+  const dictate = async () => {
+    if (listening()) return;
+    clearTimeout(timer); const key = voiceKey(), request = new AbortController(); voice = request; setListening(true);
+    try { const text = await app.platform.call<string | null>('voice.search', {}, request.signal);
+      if (!request.signal.aborted && key === voiceKey() && text?.trim()) { const value = text.trim().slice(0, 64); setDraft(value); props.change(value); }
+    } catch { if (!request.signal.aborted) app.notify('Voice search unavailable. Use the keyboard.'); }
+    finally { if (voice === request) { setListening(false); if (!request.signal.aborted && key === voiceKey()) restoreFocus('search-voice'); voice = undefined; } }
+  };
   let field: FieldHandle | undefined, timer: ReturnType<typeof setTimeout> | undefined, keyboardFocus = 'search-0-0';
   createEffect(on(() => [props.query, props.mode] as const, ([value]) => { clearTimeout(timer); setDraft(value); }));
   const change = (value: string) => { setDraft(value); clearTimeout(timer); timer = setTimeout(() => props.change(value.trim().slice(0, 64)), 300); };
-  const label = () => props.mode === 'anime' ? 'Search anime' : 'Search films and TV shows';
+  const label = () => props.mode === 'anime' ? 'Search anime' : props.mode === 'people' ? 'Search actors and directors' : props.mode === 'studios' ? 'Search production studios' : 'Search films and TV shows';
   const switchMode = (mode: SearchMode) => { if (mode === props.mode) return; clearTimeout(timer); props.switchMode(mode, draft().trim().slice(0, 64)); };
   const done = () => { clearTimeout(timer); props.change(draft().trim().slice(0, 64)); if (props.titles[0]) restoreFocus(`${props.prefix}:0:${titleKey(props.titles[0])}`); };
   let alive = true;
@@ -278,12 +268,14 @@ function SearchResults(props: { mode: SearchMode; switchMode(mode: SearchMode, q
   onCleanup(() => { alive = false; clearTimeout(timer); window.removeEventListener('keydown', keydown, true); });
   return <Column width={1728} height={848} gap={24} scroll="none">
     <Row width={1728} height={82} gap={24} onUp={() => restoreFocus('nav-search')}>
-      <text skipFocus width={760} height={76} fontSize={54} lineHeight={64} fontFamily="Roboto700" maxLines={1}>Find your next story.</text>
-      <Button id="search-mode-media" label="Movies & TV" width={280} selected={props.mode === 'media'} action={() => switchMode('media')} />
-      <Button id="search-mode-anime" label="Anime" width={180} selected={props.mode === 'anime'} action={() => switchMode('anime')} />
-      <Button label="Device keyboard" width={360} action={() => app.run(async () => { const value = await app.platform.call<string | null>('input', { label: label(), value: draft() }); if (alive && value !== null) change(value); })} />
+      <text skipFocus width={580} height={76} fontSize={54} lineHeight={64} fontFamily="Roboto700" maxLines={1}>Find your next story.</text>
+      <Button id="search-mode-media" label="Movies & TV" width={220} selected={props.mode === 'media'} action={() => switchMode('media')} />
+      <Button id="search-mode-anime" label="Anime" width={140} selected={props.mode === 'anime'} action={() => switchMode('anime')} />
+      <Button id="search-mode-people" label="People" width={160} selected={props.mode === 'people'} action={() => switchMode('people')} />
+      <Button id="search-mode-studios" label="Studios" width={160} selected={props.mode === 'studios'} action={() => switchMode('studios')} />
+      <Button label="Device keyboard" width={280} action={() => app.run(async () => { const value = await app.platform.call<string | null>('input', { label: label(), value: draft() }); if (alive && value !== null) change(value); })} />
     </Row>
-    <TextField id="search-field" label={label()} value={draft()} change={change} width={1728} maxLength={64} handle={handle => field = handle} up={() => restoreFocus(`search-mode-${props.mode}`)} down={() => restoreFocus('search-0-0')} submit={done} />
+    <Row width={1728} height={100} gap={24}><TextField id="search-field" label={label()} value={draft()} change={change} width={app.host.voice ? 1404 : 1728} maxLength={64} handle={handle => field = handle} up={() => restoreFocus(`search-mode-${props.mode}`)} down={() => restoreFocus('search-0-0')} submit={done} /><Show when={app.host.voice}><Button id="search-voice" label={listening() ? 'Listening…' : 'Voice search'} icon="microphone" width={284} disabled={listening()} action={() => void dictate()} /></Show></Row>
     <view width={1728} height={620} clipping={[0, 20, 20, 20]} forwardFocus={0}>
     <Row width={1728} height={620} gap={50}>
       <Column width={580} height={620} gap={12} scroll="none">
@@ -293,7 +285,8 @@ function SearchResults(props: { mode: SearchMode; switchMode(mode: SearchMode, q
       <Column width={1098} height={620} gap={16} scroll="none" onLeft={() => restoreFocus(keyboardFocus)}>
         <Show when={props.pending}><Status width={1098} message="Searching…" /></Show>
         <Show when={!props.query}><Status width={1098} message={props.mode === 'anime' ? 'Search for anime. Type, or use the keyboard.' : 'Search for a film or TV show. Type, or use the keyboard.'} /></Show>
-        <Show when={props.query && !props.pending && !props.error && !props.titles.length}><Status width={1098} message={`No results for “${props.query}”. Try a different title.`} /></Show>
+        <Show when={['media', 'anime'].includes(props.mode) && props.query && !props.pending && !props.error && !props.titles.length}><Status width={1098} message={`No results for “${props.query}”. Try a different title.`} /></Show>
+        <Show when={props.mode === 'people' || props.mode === 'studios' ? props.prefix : undefined} keyed>{prefix => <EntityResults kind={props.mode as 'people' | 'studios'} query={props.query} prefix={prefix} width={1098} />}</Show>
         <Show when={props.prefix} keyed>{prefix => <Show when={props.titles.length}><TitleGrid titles={props.titles} prefix={prefix} columns={4} width={1098} height={600} initial={props.initial} autofocus={props.restore} focus={props.focus} open={props.open} end={props.end} /></Show>}</Show>
       </Column>
     </Row>

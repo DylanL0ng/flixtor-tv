@@ -1,5 +1,5 @@
 import { createStore, unwrap } from 'solid-js/store';
-import { Countdown, WatchingSession } from './timing';
+import { Countdown, WatchingSession, endingEligible } from './timing';
 import { episodeKey, failureOf, finished, mergeSegments, orderedEpisodes, playbackKey, titleKey, type Account, type AnimeVersion, type Detail, type Episode, type Failure, type Segment, type Stream } from '../../domain/models';
 import type { Platform, PlayerEvent } from '../../platform/platform';
 import type { Repository } from '../../domain/repository';
@@ -19,7 +19,7 @@ export function createPlayback(platform: Platform, repo: Repository, flixtor: Fl
   const attendance = new WatchingSession(() => performance.now());
   const profile = () => repo.current.profiles.find(p => p.id === identityProfile);
   const current = (token: number, signal: AbortSignal) => token === request && !signal.aborted && identityProfile === profileId();
-  function command(action: string, args: Record<string, unknown> = {}) { return platform.call('player.command', { id: state.id, action, ...args }); }
+  function command(action: string, args: Record<string, unknown> = {}) { if (action === 'seek') { countdown.reset(); set('countdown', undefined); } return platform.call('player.command', { id: state.id, action, ...args }); }
   function save() {
     const e = state.event, d = state.detail; if (!e || !d || e.id !== state.id) return Promise.resolve();
     return repo.progress(identityProfile, { title: unwrap(d.title), episode: unwrap(state.episode), version: state.version, position: e.ended ? e.duration : e.position, duration: e.duration });
@@ -112,12 +112,17 @@ export function createPlayback(platform: Platform, repo: Repository, flixtor: Fl
     } catch (error) { if (current(token, signal)) set({ loading: false, error: failureOf(error) }); }
   }
   const next = () => { const list = orderedEpisodes(state.detail?.episodes || []); return list[list.findIndex(e => episodeKey(e) === episodeKey(state.episode)) + 1]; };
+  let advancing = false;
   async function advance(automatic: boolean) {
     const e = next(), d = state.detail; if (!e || !d || state.loading || state.error || state.chooser) return;
+    if (advancing || identityProfile !== profileId() || automatic && (!state.event || state.event.id !== state.id || !endingEligible(state.event, state.regions, skipped))) return;
+    advancing = true;
+    try {
     const token = request, signal = abort.signal;
     const event = state.event; if (event) await repo.progress(identityProfile, { title: unwrap(d.title), episode: unwrap(state.episode), version: state.version, position: event.duration, duration: event.duration });
-    if (!current(token, signal)) return;
+    if (!current(token, signal) || automatic && (!foreground || !state.event || state.event.id !== event?.id || !endingEligible(state.event, state.regions, skipped))) return;
     await start(d, e, state.version, true, automatic);
+    } finally { advancing = false; }
   }
   function effectiveAction(segment: Segment) {
     const p = identityProfile, key = titleKey(state.detail!.title);
@@ -131,6 +136,7 @@ export function createPlayback(platform: Platform, repo: Repository, flixtor: Fl
     }
     if (event.type !== 'player') return;
     const e = event.value as PlayerEvent; if (!state.id || e.id !== state.id || identityProfile !== profileId()) return;
+    if (state.event && (state.event.duration !== e.duration || e.position < state.event.position || Math.abs(e.position - state.event.position) > Math.max(2000, e.time - state.event.time + 1000))) countdown.reset();
     set('event', e); attendance.playback(attendance.token, e.playing, foreground);
     if (e.error) { void recover(e); return; }
     if (e.duration > 0 && segmentDuration !== e.duration) { segmentDuration = e.duration; void fetchSegments(request, e.duration); }
@@ -148,9 +154,10 @@ export function createPlayback(platform: Platform, repo: Repository, flixtor: Fl
     if (seconds === 0) { void stop(); return; }
     const active = state.regions.filter(r => r.start <= e.position && e.position < r.end && r.end <= e.duration).at(-1);
     const canRun = foreground && !state.menu && !state.bufferAhead && !state.chooser && !attendance.pending && !state.undo && state.preview === undefined && !e.buffering;
-    if (active && effectiveAction(active) === 'AUTO' && !skipped.has(active.id) && canRun && e.playing) { skipped.add(active.id); set('undo', { position: e.position, type: active.typeId, until: performance.now() + 5000 }); void command('seek', { position: active.end }); }
-    const credits = state.regions.find(r => r.type === 'outro' && r.end <= e.duration && e.position >= r.start && (e.position < r.end || skipped.has(r.id)));
-    const eligible = !!next() && !!profile()?.autoplay && (e.ended || !!credits && !attendance.dueAtCredits(attendance.token));
+    const safeEnding = endingEligible(e, state.regions, skipped);
+    if (active && effectiveAction(active) === 'AUTO' && !skipped.has(active.id) && canRun && e.playing
+      && (!['outro', 'mixed-ed', 'post_credits'].includes(active.type) || active.type === 'outro' && safeEnding)) { skipped.add(active.id); set('undo', { position: e.position, type: active.typeId, until: performance.now() + 5000 }); void command('seek', { position: active.end }); }
+    const eligible = !!next() && !!profile()?.autoplay && safeEnding && (e.ended || !attendance.dueAtCredits(attendance.token));
     if (countdown.tick(performance.now(), eligible, canRun && (e.ended || e.playing))) void advance(true);
     set('countdown', eligible && !countdown.cancelled ? Math.ceil(countdown.remaining / 1000) : undefined);
     if (e.playing && canRun && !e.ended && performance.now() - interactionAt > 6000) set('controls', false);

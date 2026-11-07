@@ -9,6 +9,7 @@ import { SegmentService } from '../services/segments';
 import { createUpdates } from '../features/updates/updates';
 import type { Title, Detail, Episode, AnimeVersion, StageArtwork } from '../domain/models';
 import { CinemetaService } from '../services/cinemeta';
+import { TmdbService } from '../services/tmdb';
 import type { createPlayback } from '../features/playback/playback';
 import type { InputRequest } from '../ui/input-state';
 import type { BrowseOrigin } from '../features/catalog/CatalogShelves';
@@ -39,7 +40,7 @@ export function createApp(platform: Platform, host: HostInfo, repo: Repository, 
     backHandlers: new Map<symbol, () => boolean>(), pendingPlayback: undefined as { detail: Detail; episode?: Episode | null; version?: AnimeVersion } | undefined,
     resumePending: async () => {}, titleCache: new Map<string, Title>(), browseOrigins: new Map<string, BrowseOrigin>(), lastFocus: '', lastProfile: '', playback: undefined as ReturnType<typeof createPlayback> | undefined, profile: () => data.profiles.find(p => p.id === profileId()),
     notice, notify, run, selected, setSelected, stage, setStage, authRevision, refreshAccount: () => { setAuthRevision(v => v + 1); void queries.invalidateQueries({ queryKey: ['account'] }); },
-    queries, flixtor, anime, segments, cinemeta, updates,
+    queries, flixtor, anime, segments, cinemeta, tmdb: new TmdbService(platform), updates,
     inputRequest, requestInput,
     input: (label: string, value = '', secret = false) => requestInput({ label, value, mode: secret ? 'password' : /seconds|number|MAL ID/i.test(label) ? 'time' : 'text',
       maxLength: label === 'Profile name' ? 30 : 256,

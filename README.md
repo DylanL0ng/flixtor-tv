@@ -142,3 +142,17 @@ The same-key signed updater was also exercised on the disposable QA emulator: it
 On both an ONN Google TV device and Chromecast with Google TV: browse, search, open details, return to prior focus, navigate episodes, pair VIP account, relaunch and verify session, play/seek/subtitles/quality, background/resume, watch for 30 minutes, disconnect/reconnect, and sign out. Verify invalid/expired VIP and pairing timeout. Actual hardware acceptance remains required. Optional GuestAccessTest (-e liveService true) uses a separate encrypted guest session. Optional VisualQaTest (-e visualQA true -e captureSize 1080, or 720) captures layouts using public sample media; run it only on the separate QA emulator. Screenshots are saved under the test app’s external files directory and kept outside Git.
 
 `ExitNavigationTest` (`-e exitQA true -e captureSize 720` or `1080`) uses disposable-emulator UI fixtures to verify root confirmation, default Stay, dismissal, nested Back and deliberate exit. `AccountEvidenceTest` (`-e accountEvidence true -e expectedAccountStatus VIP`) is an explicit live account check using the device's existing session. It emits only the status category; use the expected state appropriate to the test account. Fixture captures do not establish upgraded physical-TV VIP acceptance.
+
+## Discovery and voice search
+
+Movie discovery uses TMDB for credits, studios, trending/rated movies, and recommendations. Configure `TV_TMDB_TOKEN` in ignored `.env` with a free personal API key or Read Access Token. The native host and loopback development bridge attach the credential only to TMDB API calls. It never enters frontend bundles; a dedicated revocable credential is appropriate because APK configuration can be extracted. About includes required attribution and the unmodified official logo.
+
+`tools/build_release.py` reads local `TV_` settings automatically. Direct Gradle invocations still require exported environment variables. Local emulator update built as version `1.0.1` / code `1001`; projector acceptance remains separate.
+
+Details support cast, directors, production studios, and related movies. People search separates acting from directing credits. Discovery titles resolve FlixTor availability independently; metadata failures do not block already resolved provider titles. Movie sorting learns wire values from provider controls. The current guest response is a capacity notice, so live VIP ordering must still be checked with an authenticated device.
+
+Voice search uses the Android system recognition activity and device speech language. The microphone button appears when a compatible activity is installed. Recognition fills the current search mode; keyboard search remains available. The app does not override system assistant buttons, continuously listen, or require a paid speech service.
+
+Automatic next episode requires a valid credits marker, at least 90% elapsed, and no more than 90 seconds remaining; otherwise it waits for native completion. Future post-credits content blocks early advancement. Early ending markers cannot automatically seek forward. Manual Next and explicit skipping remain available.
+
+Regression coverage includes distinct sort fixtures, metadata identity/role matching, cancellation, safe autoplay, speech result retirement, and rapid remote navigation at 720p/1080p/4K. Browser fixtures and emulator integration do not establish physical projector microphone/remote acceptance.

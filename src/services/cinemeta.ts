@@ -7,6 +7,7 @@ export type CinemetaType = 'movie' | 'series';
 export type CinemetaCatalog = 'top' | 'imdbRating';
 
 export interface DiscoveryTitle {
+  tmdbId?: number;
   id: string;
   type: CinemetaType;
   name: string;

@@ -17,6 +17,7 @@ android {
         // Supplies the IntroDB key from the build environment rather than the viewer. Blank
         // disables contributing; reading skip segments never needs a key.
         buildConfigField("String", "INTRODB_API_KEY", "\"${providers.environmentVariable("TV_INTRODB_API_KEY").orElse("").get()}\"")
+        buildConfigField("String", "TMDB_TOKEN", "\"${providers.environmentVariable("TV_TMDB_TOKEN").orElse("").get()}\"")
     }
     buildFeatures { compose = true; buildConfig = true }
     composeOptions { kotlinCompilerExtensionVersion = "1.5.14" }
@@ -79,6 +80,7 @@ val buildSolidTv by tasks.registering(Exec::class) {
     commandLine("npm", "run", "build")
     inputs.dir(webRoot.resolve("src"))
     inputs.dir(webRoot.resolve("public"))
+    inputs.dir(webRoot.resolve("tools"))
     inputs.files(webRoot.resolve("package-lock.json"), webRoot.resolve("vite.config.ts"), webRoot.resolve("index.html"))
     outputs.dir(webRoot.resolve("dist"))
 }

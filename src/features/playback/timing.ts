@@ -13,9 +13,22 @@ export class WatchingSession {
   dueAtCredits(token: number) { this.settle(); return token !== this.token || this.pending || this.episodes + (this.finished ? 0 : 1) >= this.minimumEpisodes && this.watched >= this.minimumWatch; }
   get seconds() { this.settle(); return this.pending ? Math.ceil(this.remaining / 1000) : undefined; }
 }
+/** Credits metadata alone is not evidence that an episode has finished. */
+export function nearEpisodeEnd(position: number, duration: number) {
+  return Number.isFinite(position) && Number.isFinite(duration) && duration > 0 && position >= 0 && position <= duration
+    && position / duration >= 0.9 && duration - position <= 90_000;
+}
+export function endingEligible(event: { position: number; duration: number; ended: boolean }, regions: readonly { type: string; start: number; end: number; id: string }[], skipped: ReadonlySet<string> = new Set()) {
+  if (event.ended) return true;
+  if (!nearEpisodeEnd(event.position, event.duration)) return false;
+  if (regions.some(r => r.type === 'post_credits' && r.start < r.end && r.end <= event.duration && r.end > event.position)) return false;
+  return regions.some(r => r.type === 'outro' && r.start >= 0 && r.start < r.end && r.end <= event.duration
+    && event.position >= r.start && (event.position < r.end || skipped.has(r.id)));
+}
 export class Countdown {
   remaining = 5000; cancelled = false; private last = 0; private running = false; private fired = false;
   cancel() { this.cancelled = true; this.running = false; }
+  reset() { this.remaining = 5000; this.running = false; this.fired = false; }
   tick(now: number, eligible: boolean, canRun: boolean) {
     if (!eligible) { this.remaining = 5000; this.running = false; this.fired = false; this.last = now; return false; }
     if (this.running && canRun && !this.cancelled) this.remaining = Math.max(0, this.remaining - Math.max(0, now - this.last));

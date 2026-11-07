@@ -41,6 +41,26 @@ function deferred<T>() {
   const promise = new Promise<T>(r => { resolve = r; });
   return { promise, resolve };
 }
+it('rejects early automatic credits skips and advances once only after native completion', async () => {
+  vi.useFakeTimers();
+  const f = await fixture();
+  const episodes = [{ season: 1, number: 1, name: 'One' }, { season: 1, number: 2, name: 'Two' }];
+  const show = { title: { id: '7', name: 'Show', path: '/watch/tv/7/show' }, episodes };
+  try {
+    await f.repo.updateProfile('default', { autoplay: true });
+    await f.repo.saveRegion(f.repo.markKey(show.title, episodes[0]), { id: 'bad-ending', type: 'outro', typeId: 'outro', start: 300_000, end: 390_000, action: 'AUTO', source: 'LOCAL' }, 1_440_000);
+    await f.player.start(show, episodes[0]);
+    f.emit(f.player.state.id, { position: 310_000, duration: 1_440_000, playing: true, playRequested: true });
+    await f.player.refreshRegions();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(f.commands.filter(c => c.action === 'seek')).toEqual([]);
+    expect(f.player.state.countdown).toBeUndefined(); expect(f.loads).toHaveLength(1);
+    f.emit(f.player.state.id, { position: 1_440_000, duration: 1_440_000, ended: true });
+    await vi.advanceTimersByTimeAsync(6500);
+    expect(f.loads).toHaveLength(2); expect(f.player.state.episode?.number).toBe(2);
+    await vi.advanceTimersByTimeAsync(10_000); expect(f.loads).toHaveLength(2);
+  } finally { f.close(); vi.useRealTimers(); }
+});
 describe('silent playback recovery', () => {
   it('stops a partially loaded player before failed account recovery and permits retry and account navigation', async () => {
     const f = await fixture();

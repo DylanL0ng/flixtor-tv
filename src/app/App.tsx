@@ -13,6 +13,7 @@ import { MaskedViewport } from '../ui/MaskedViewport';
 import { Overlay } from '../ui/Overlay';
 import { InputDialog } from '../ui/Input';
 import { Profiles } from '../features/profiles/Profiles';
+import { DiscoveryPage } from '../features/catalog/Discovery';
 import { Catalog } from '../features/catalog/Catalog';
 import { createPlayback } from '../features/playback/playback';
 import { Config } from '@solidtv/solid';
@@ -133,13 +134,14 @@ function Shell(props: ParentProps) {
 }
 function Page() {
   const location = useLocation();
-  const lazyRoute = () => location.pathname === '/detail' || location.pathname.startsWith('/settings') || location.pathname === '/pair' || location.pathname === '/player';
+  const lazyRoute = () => location.pathname === '/discover' || location.pathname === '/detail' || location.pathname.startsWith('/settings') || location.pathname === '/pair' || location.pathname === '/player';
   // Catalogue queries render their own pending states. Suspending a mounted
   // canvas subtree removes native nodes that Solid later tries to reuse.
-  return <Show when={lazyRoute()} fallback={<Catalog />}><Suspense fallback={<text skipFocus width={1400} height={80} fontSize={30} color={palette.muted}>Loading…</text>}><Switch>
+  return <Show when={lazyRoute()} fallback={<Catalog />}><Show when={location.pathname} keyed>{_path => <Suspense fallback={<text skipFocus width={1400} height={80} fontSize={30} color={palette.muted}>Loading…</text>}><Switch>
+    <Match when={location.pathname === '/discover'}><DiscoveryPage /></Match>
     <Match when={location.pathname === '/detail'}><DetailPage /></Match>
     <Match when={location.pathname.startsWith('/settings')}><Settings /></Match>
     <Match when={location.pathname === '/pair'}><Pairing /></Match>
     <Match when={location.pathname === '/player'}><PlayerPage /></Match>
-  </Switch></Suspense></Show>;
+  </Switch></Suspense>}</Show></Show>;
 }

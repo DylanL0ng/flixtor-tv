@@ -26,7 +26,7 @@ export function browserPlatform(): Platform {
   return {
     async call<T>(method: string, args: Record<string, unknown> = {}, signal?: AbortSignal): Promise<T> {
       signal?.throwIfAborted(); let value: unknown = null;
-      if (method === 'ready') { await remote('session.open', {}, signal); value = { platform: 'browser', version: 'development', versionCode: 0, sdk: 0, commit: 'local', reportUrl: '', contribution: false }; }
+      if (method === 'ready') { await remote('session.open', {}, signal); value = { platform: 'browser', version: 'development', versionCode: 0, sdk: 0, commit: 'local', reportUrl: '', contribution: false, tmdb: await remote('tmdb.available'), voice: false }; }
       else if (method === 'http' || method === 'art' || method === 'session.clear') value = await remote(method, args, signal);
       else if (method === 'storage.get') value = localStorage.getItem(prefix + args.key);
       else if (method === 'storage.set') localStorage.setItem(prefix + args.key, String(args.value));

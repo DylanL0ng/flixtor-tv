@@ -1,11 +1,11 @@
 import { ServiceError } from '../domain/models';
 
 export interface HttpRequest {
-  client: 'flixtor' | 'anime' | 'introdb' | 'aniskip' | 'updates' | 'report' | 'public';
+  client: 'flixtor' | 'anime' | 'introdb' | 'aniskip' | 'updates' | 'report' | 'public' | 'tmdb';
   url: string; method?: 'GET' | 'POST'; headers?: Record<string, string>; body?: string;
 }
 export interface HttpResponse { status: number; body: string; location?: string }
-export interface HostInfo { platform: string; version: string; versionCode: number; sdk: number; commit: string; reportUrl: string; contribution: boolean }
+export interface HostInfo { platform: string; version: string; versionCode: number; sdk: number; commit: string; reportUrl: string; contribution: boolean; voice?: boolean; tmdb?: boolean }
 export interface Track { id: string; type: number; label: string; selected: boolean; supported: boolean }
 export interface PlayerEvent {
   id: string; position: number; duration: number; buffered: number; playing: boolean; playRequested: boolean;
@@ -49,7 +49,7 @@ export function androidPlatform(): Platform {
           pending.delete(id); cleanup(); reject(new DOMException('Cancelled', 'AbortError'));
           host.postMessage(JSON.stringify({ v: 1, id: `cancel:${id}`, method: 'cancel', args: { id } }));
         };
-        const timer = setTimeout(() => { pending.delete(id); cleanup(); reject(new Error('Platform request timed out')); }, method === 'input' ? 600_000 : 60_000);
+        const timer = setTimeout(() => { pending.delete(id); cleanup(); host.postMessage(JSON.stringify({ v: 1, id: `cancel:${id}`, method: 'cancel', args: { id } })); reject(new Error('Platform request timed out')); }, method === 'input' || method === 'voice.search' ? 600_000 : 60_000);
         const cleanup = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort); };
         pending.set(id, { resolve: value => resolve(value as T), reject, cleanup });
         signal?.addEventListener('abort', abort, { once: true });

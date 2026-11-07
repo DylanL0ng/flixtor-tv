@@ -68,7 +68,7 @@ for (const viewport of [{ width: 1920, height: 1080 }, { width: 1280, height: 72
     const peer = await page.getByRole('button', { name: 'top 4', exact: true }).boundingBox();
     const navigation = await page.getByRole('button', { name: 'Movies', exact: true }).boundingBox();
     await page.screenshot({ path: info.outputPath('media-mask.png') });
-    expect(selected!.height).toBeCloseTo(466 * viewport.height / 1080, 0);
+    expect(selected!.height).toBeCloseTo(451 * viewport.height / 1080, 0);
     expect(selected!.width).toBeGreaterThan(peer!.width);
     expect(selected!.y).toBeGreaterThan(navigation!.y + navigation!.height + 12);
     await page.screenshot({ path: info.outputPath('media-mask.png') });

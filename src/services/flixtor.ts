@@ -3,6 +3,7 @@ import { ServiceError, titleKey, type Account, type Caption, type Detail, type F
 import type { HttpResponse, Platform } from '../platform/platform';
 export const BASE = 'https://flixtor.to';
 export const USER_AGENT = 'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+export const actorSearchQuery = (name: string) => `@actor: ${name.trim()}`;
 export function secureUrl(value: string, base?: string) {
   const url = new URL(value, base);
   if (url.protocol !== 'https:' || url.username || url.password || url.port && url.port !== '443' || !url.hostname.includes('.') || url.hostname.endsWith('.local') || /^[\d.]+$/.test(url.hostname) || url.hostname.includes(':')) throw new ServiceError('CHANGED');
@@ -64,7 +65,7 @@ import { getOuterHTML as awaitlessHtml } from 'domutils';
 export function parseDetail(html: string, original: Title): Detail {
   check(html); const doc = document(html); if (!one(doc, 'meta[property="og:type"]')) throw new ServiceError('CHANGED');
   const candidates = all(doc, 'a[href*="imdb.com"], [data-imdb], [data-imdb-id], meta[content*="imdb.com"]');
-  const imdb = candidates.map(n => Object.values(n.attribs).join(' ')).join(' ').match(/tt\d{7,8}/)?.[0] || original.imdb;
+  const imdb = candidates.map(n => Object.values(n.attribs).join(' ')).join(' ').match(/tt\d{7,10}/)?.[0] || original.imdb;
   return { title: { ...original, poster: attr(one(doc, 'meta[property="og:image"]'), 'content') || original.poster,
     synopsis: attr(one(doc, 'meta[name="description"]'), 'content'), imdb,
     backdrop: /background-image\s*:\s*url\(['"]?(https:\/\/[^)'"\s]+)/.exec(html)?.[1] || '' },
@@ -98,7 +99,21 @@ export function parseStream(raw: string): Stream {
     return { uri, captions, headers: { Referer: BASE + '/', 'User-Agent': USER_AGENT } };
   } catch (e) { if (e instanceof ServiceError) throw e; throw new ServiceError('CHANGED'); }
 }
+/** Learn provider values from its labelled controls instead of assuming UI IDs are API values. */
+export function parseSortControls(html: string) {
+  const values: Record<string, string> = { latest: 'latest', best: 'best', name: 'name' };
+  for (const node of all(document(html), '[data-s]')) {
+    const value = attr(node, 'data-s'), label = text(node).trim().toLowerCase();
+    if (!/^[a-z][a-z0-9_-]{0,30}$/i.test(value)) continue;
+    if (/top rated|highest rated|rating|best rated/.test(label)) values.best = value;
+    else if (/a\s*[-–—]\s*z|alphabetical|title|name/.test(label)) values.name = value;
+    else if (/latest|recently added|newly added/.test(label)) values.latest = value;
+  }
+  return values;
+}
 export class FlixtorService {
+  private sortValues = new Map<string, Record<string, string>>();
+  private sortTasks = new Map<string, Promise<string>>();
   private csrf = ''; private bootstrapTask?: Promise<void>;
   constructor(private platform: Platform) {}
   private async raw(path: string, signal?: AbortSignal, data?: unknown, redirects = 0): Promise<string> {
@@ -127,11 +142,22 @@ export class FlixtorService {
   async home(signal?: AbortSignal) { await this.bootstrap(signal); return parseHome(await this.raw('/home', signal)); }
   async browse(kind: 'movies' | 'tvshows', page: number, sort: string, signal?: AbortSignal) {
     if (!Number.isInteger(page) || page < 1 || page > 10000 || !['latest', 'best', 'name'].includes(sort)) throw new ServiceError('CHANGED');
-    await this.bootstrap(signal); return parseCards(await this.raw(`/show/${kind}?ajax=1&page=${page}&sort=${sort}`, signal));
+    await this.bootstrap(signal);
+    const pending = this.sortTasks.get(kind);
+    if (pending) { await pending.catch(() => {}); signal?.throwIfAborted(); }
+    if (!this.sortValues.has(kind)) {
+      const task = this.raw(`/show/${kind}?ajax=1&page=1&sort=latest`, signal).then(html => {
+        parseCards(html); this.sortValues.set(kind, parseSortControls(html)); return html;
+      });
+      this.sortTasks.set(kind, task);
+      try { const html = await task; if (sort === 'latest' && page === 1) return parseCards(html); }
+      finally { if (this.sortTasks.get(kind) === task) this.sortTasks.delete(kind); }
+    }
+    return parseCards(await this.raw(`/show/${kind}?ajax=1&page=${page}&sort=${encodeURIComponent(this.sortValues.get(kind)![sort])}`, signal));
   }
-  async search(query: string, page: number, signal?: AbortSignal) {
+  async search(query: string, page: number, signal?: AbortSignal, tab?: 'movies,tvshows') {
     if (!query.trim() || query.length > 64) return []; await this.bootstrap(signal);
-    return parseCards(await this.raw(`/search/${encodeURIComponent(query)}?ajax=1&page=${page}`, signal));
+    return parseCards(await this.raw(`/search/${encodeURIComponent(query)}?ajax=1&page=${page}${tab ? `&tab=${tab}` : ''}`, signal));
   }
   async detail(t: Title, signal?: AbortSignal) { await this.bootstrap(signal); return parseDetail(await this.raw(t.path, signal), t); }
   async account(signal?: AbortSignal): Promise<Account> {

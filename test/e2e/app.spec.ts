@@ -95,25 +95,25 @@ test('playback failure retry closes modal and account action leaves player', asy
 test('sort choices reorder shelves, preserve profile data and restore after browser navigation', async ({ page }) => {
   await home(page); await activate(page, 'Movies');
   await page.keyboard.press('ArrowUp');
-  await activate(page, 'Latest'); await activate(page, 'A–Z'); await expect(page).toHaveURL(/sort=name/);
+  await page.keyboard.press('ArrowUp'); await page.getByRole('button', { name: 'Latest', exact: true }).focus(); await page.keyboard.press('Enter'); await activate(page, 'A–Z'); await expect(page).toHaveURL(/sort=name/);
   await activate(page, 'Northbound'); await expect(page).toHaveURL(/detail/); await page.goBack();
   await expect(page).toHaveURL(/sort=name/); await expect(page.locator('button[data-focused="true"]')).toHaveText('Northbound');
   await activate(page, 'My List'); await expect(page).toHaveURL(/list/); await page.reload();
   await expect(page.getByRole('button', { name: 'My profile', exact: true })).toBeAttached();
 });
 test('Home starts with discovery, D-pad moves through a distinct movie rail, and detail restores its origin', async ({ page }) => {
-  await home(page); await expect(page.locator('button[data-focused="true"]')).toHaveText('Find on FlixTor');
+  await home(page); await expect(page.locator('button[data-focused="true"]')).toHaveText('Details');
   await page.keyboard.press('ArrowDown'); await expect(page.locator('button[data-focused="true"]')).toHaveText('Northbound');
   await page.keyboard.press('ArrowRight'); await expect(page.locator('button[data-focused="true"]')).toHaveText('Quiet Harbour');
   await page.keyboard.press('ArrowRight'); await expect(page.locator('button[data-focused="true"]')).toHaveText('Quiet Harbour');
   await page.keyboard.press('ArrowLeft'); await expect(page.locator('button[data-focused="true"]')).toHaveText('Northbound');
   await page.keyboard.press('ArrowLeft'); await expect(page.locator('button[data-focused="true"]')).toHaveText('Northbound');
-  await page.keyboard.press('ArrowUp'); await expect(page.locator('button[data-focused="true"]')).toHaveText('Find on FlixTor');
+  await page.keyboard.press('ArrowUp'); await expect(page.locator('button[data-focused="true"]')).toHaveText('Details');
   await page.keyboard.press('ArrowUp'); await expect(page.locator('button[data-focused="true"]')).toHaveText('Home');
   await page.keyboard.press('ArrowRight'); await expect(page.locator('button[data-focused="true"]')).toHaveText('Movies');
   await page.keyboard.press('ArrowLeft'); await expect(page.locator('button[data-focused="true"]')).toHaveText('Home');
   await page.keyboard.press('ArrowDown');
-  await page.keyboard.press('Enter'); await expect(page).toHaveURL(/title=m%3A2/);
+  await page.keyboard.press('Enter'); await expect(page).toHaveURL(/tmdb=2|imdb=tt1234567|title=m%3A2/);
   await page.keyboard.press('Escape'); await expect(page).toHaveURL(/home/);
   await expect(page.locator('button[data-focused="true"]')).toHaveText('Northbound');
 });
