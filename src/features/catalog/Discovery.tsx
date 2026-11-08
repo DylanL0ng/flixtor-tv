@@ -84,7 +84,7 @@ export function EntityResults(props: { kind: 'people' | 'studios'; query: string
     for (let c = 6; c >= 2; c--) {
       const cardW = (props.width - 32 - (c - 1) * rowGap) / c;
       if (cardW < 140) continue;
-      const cardH = cardW * 0.5625 + 80;
+      const cardH = cardW * 0.5625 + 80 + (props.kind === 'people' ? 78 : 0);
       const r = Math.max(2, Math.min(4, Math.floor((600 - 12) / (cardH + rowGap))));
       const area = c * r;
       if (area > bestArea) { bestArea = area; best = c; }
@@ -92,7 +92,7 @@ export function EntityResults(props: { kind: 'people' | 'studios'; query: string
     return best;
   };
   const cardWidth = () => (props.width - 32 - (columns() - 1) * rowGap) / columns();
-  const cardHeight = () => cardWidth() * 0.5625 + 80;
+  const cardHeight = () => cardWidth() * 0.5625 + 80 + (props.kind === 'people' ? 78 : 0);
   const visibleRows = () => Math.min(4, Math.max(2, Math.floor((600 - 12) / (cardHeight() + rowGap))));
   const viewportHeight = () => visibleRows() * cardHeight() + (visibleRows() - 1) * rowGap + 20;
   return <>
@@ -102,7 +102,10 @@ export function EntityResults(props: { kind: 'people' | 'studios'; query: string
     <ContentError screenKey={props.prefix} operations={[{ id: 'entities', error: query.error, fetching: query.isFetching, retry: () => query.refetch() }]} />
     <Show when={items().length}><view width={props.width} height={viewportHeight()} clipping={[20, 20, 20, 20]} forwardFocus={0}>
       <VirtualGrid each={items()} x={16} y={12} width={props.width - 32} height={viewportHeight() - 24} gap={rowGap} columns={columns()} rows={visibleRows()} buffer={1} scroll="always" wrap={false} onEndReached={end} onEndReachedThreshold={columns() * 2} selected={origin?.item || 0}>
-        {entity => <Poster item={entity()} title={{ name: entity().name, initials: initials(entity().name), poster: entity().image }} width={cardWidth()} landscape id={focusId(entity())} autofocus={origin?.focus === focusId(entity())} onFocus={() => remember(entity())} action={() => navigate(entityRoute(props.kind === 'people' ? 'actor' : 'studio', entity()))} />}
+        {entity => <Column item={entity()} width={cardWidth()} height={cardHeight()} gap={10} scroll="none">
+          <Poster title={{ name: entity().name, initials: initials(entity().name), poster: entity().image }} width={cardWidth()} landscape id={focusId(entity())} autofocus={origin?.focus === focusId(entity())} onFocus={() => remember(entity())} action={() => navigate(entityRoute(props.kind === 'people' ? 'actor' : 'studio', entity()))} />
+          <Show when={props.kind === 'people'}><Button label={`Directed by ${entity().name}`} width={cardWidth()} height={68} id={focusId(entity(), true)} autofocus={origin?.focus === focusId(entity(), true)} onFocus={() => remember(entity(), true)} action={() => navigate(entityRoute('director', entity()))} /></Show>
+        </Column>}
       </VirtualGrid>
     </view></Show>
   </>;

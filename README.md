@@ -102,7 +102,7 @@ Access errors distinguish required sign-in, expired sessions, VIP restrictions, 
 
 ## Releases and problem reports
 
-GitHub Actions verifies unit tests, lint, debug builds, and notification tests. Stable `vMAJOR.MINOR.PATCH` tags build using the existing release key and publish `app-release.apk` plus `release.json`. CI version codes are `100 + GITHUB_RUN_NUMBER`; commit SHA is embedded in the APK. Configure repository secrets `TV_KEYSTORE_BASE64`, `TV_STORE_PASSWORD`, `TV_KEY_PASSWORD`, `TV_KEY_ALIAS`, and optionally `TV_INTRODB_API_KEY` to enable contributing skip timestamps from release builds. Keys never belong in the source tree. Keep the original private key backed up.
+GitHub Actions verifies unit tests, lint, debug builds, and notification tests. Stable `vMAJOR.MINOR.PATCH` tags build using the existing release key and publish `app-release.apk` plus `release.json`. CI version codes are `1000 + GITHUB_RUN_NUMBER`; commit SHA is embedded in the APK. Configure repository secrets `TV_KEYSTORE_BASE64`, `TV_STORE_PASSWORD`, `TV_KEY_PASSWORD`, `TV_KEY_ALIAS`, and optionally `TV_INTRODB_API_KEY` to enable contributing skip timestamps from release builds. Keys never belong in the source tree. Keep the original private key backed up.
 
 A push to `main` verifies source but does not publish an APK. After verification, push an increasing stable version tag to run the release job. The updater installs published stable releases, not unreleased commits. A downloaded update is announced outside playback even when Android installation permission still needs to be enabled; Later keeps it available in Settings.
 

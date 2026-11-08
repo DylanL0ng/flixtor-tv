@@ -97,8 +97,6 @@ export function CatalogShelves(props: {
       createEffect(on(() => shelf().titles, titles => {
         const node = nodes.get(id);
         if (!node || !focusedKey) return;
-        const retained = titles.findIndex(t => shelfTitleKey(t) === focusedKey);
-        const index = retained >= 0 ? retained : Math.min(focusedIndex, Math.max(0, titles.length - 1));
         const current = activeElement();
         const ownsFocus = current?.parent === node || activeRail === id && !current?.rendered;
         if (ownsFocus) {
@@ -106,6 +104,9 @@ export function CatalogShelves(props: {
           // VirtualRow updates its mounted window in microtasks. Restore after those settle.
           restoreFrame = requestAnimationFrame(() => {
             if (nodes.get(id) !== node || !node.rendered || !titles.length || activeScope() !== 'screen') return;
+            // An arrow can move focus between scheduling and this frame.
+            const retained = titles.findIndex(t => shelfTitleKey(t) === focusedKey);
+            const index = retained >= 0 ? retained : Math.min(focusedIndex, Math.max(0, titles.length - 1));
             const active = activeElement();
             if (active?.rendered && active.parent !== node) return;
             // The old card may still reference its parent after its scene node died.

@@ -72,6 +72,7 @@ jobs:
           TV_KEY_ALIAS: ${{ secrets.TV_KEY_ALIAS }}
           TV_COMMIT_SHA: ${{ github.sha }}
           TV_REPORT_URL: ${{ vars.TV_REPORT_URL }}
+          TV_TMDB_TOKEN: ${{ secrets.TV_TMDB_TOKEN }}
         run: python3 tools/ci_release.py
       - name: Publish stable APK and metadata
         env:
