@@ -6,6 +6,13 @@ export function virtualRows(): Plugin {
     name: 'solidtv-refresh-virtual-window', enforce: 'pre',
     transform(source, id) {
       const path = id.split('?')[0].replaceAll('\\', '/');
+      if (path.endsWith('/@solidtv/solid/dist/src/primitives/utils/withScrolling.js')) {
+        const before = 'if (position !== nextPosition) {';
+        if (source.split(before).length !== 2) throw new Error('SolidTV scrolling integration changed');
+        // Reversing before the first animation frame must cancel the obsolete target,
+        // even when the new target equals the current rendered position.
+        return { code: source.replace(before, 'if (position !== nextPosition || targetPosition !== nextPosition) {'), map: null };
+      }
       if (!path.endsWith('/@solidtv/solid/dist/src/primitives/Virtual.jsx')) return;
       const before = 'if (start !== prev.start || newSlice.length === 0) {';
       if (source.split(before).length !== 2) throw new Error('SolidTV virtual window integration changed');
