@@ -15,7 +15,7 @@ export function createPlayback(platform: Platform, repo: Repository, flixtor: Fl
     undo?: { position: number; type: string; until: number };
   }>({ id: '', loading: false, controls: true, menu: '', regions: [], segmentsUnavailable: false, chooser: false, available: [], bufferAhead: false, bufferReady: false, bufferStalled: false });
   let request = 0, loadSequence = 0, abort = new AbortController(), source: Stream | undefined, identityProfile = '', savedAt = 0, interactionAt = performance.now(), foreground = true;
-  let recoveryUsed = false, resumeAllowed = true, countdown = new Countdown(), skipped = new Set<string>(), bufferResume = false, bufferGrowth = 0, bufferAt = 0, segmentDuration = 0;
+  let recoveryUsed = false, recoveryPlayback = 0, resumeAllowed = true, countdown = new Countdown(), skipped = new Set<string>(), bufferResume = false, bufferGrowth = 0, bufferAt = 0, segmentDuration = 0;
   const attendance = new WatchingSession(() => performance.now());
   const profile = () => repo.current.profiles.find(p => p.id === identityProfile);
   const current = (token: number, signal: AbortSignal) => token === request && !signal.aborted && identityProfile === profileId();
@@ -67,7 +67,7 @@ export function createPlayback(platform: Platform, repo: Repository, flixtor: Fl
     }
   }
   async function refresh(token: number, position: number, play: boolean, signal: AbortSignal) {
-    recoveryUsed = true;
+    recoveryUsed = true; recoveryPlayback = 0;
     const account = await flixtor.account(signal);
     if (!current(token, signal)) return;
     accountChanged(account);
@@ -77,7 +77,7 @@ export function createPlayback(platform: Platform, repo: Repository, flixtor: Fl
     const previousId = state.id, progress = save();
     const stopped = previousId ? platform.call('player.command', { id: previousId, action: 'stop' }) : Promise.resolve();
     abort.abort(); abort = new AbortController(); const token = ++request, signal = abort.signal;
-    identityProfile = profileId(); source = undefined; segmentDuration = 0; savedAt = 0; skipped = new Set(); countdown = new Countdown(); recoveryUsed = false;
+    identityProfile = profileId(); source = undefined; segmentDuration = 0; savedAt = 0; skipped = new Set(); countdown = new Countdown(); recoveryUsed = false; recoveryPlayback = 0;
     attendance.start(automatic); resumeAllowed = foreground; interactionAt = performance.now();
     set({ detail, episode, version, id: '', loading: true, error: undefined, event: undefined, controls: true, menu: '', regions: [], segmentsUnavailable: false,
       chooser: false, available: [], preview: undefined, countdown: undefined, stillWatching: undefined, bufferAhead: false, bufferReady: false, bufferStalled: false, undo: undefined });
@@ -132,11 +132,21 @@ export function createPlayback(platform: Platform, repo: Repository, flixtor: Fl
     if (event.type === 'lifecycle') {
       foreground = (event.value as { foreground: boolean }).foreground;
       attendance.playback(attendance.token, state.event?.playing ?? false, foreground);
-      if (!foreground) { resumeAllowed = false; void save(); set({ menu: '', bufferAhead: false, undo: undefined }); } else set('controls', true);
+      if (!foreground) { resumeAllowed = false; recoveryPlayback = 0; void save(); set({ menu: '', bufferAhead: false, undo: undefined }); } else set('controls', true);
     }
     if (event.type !== 'player') return;
     const e = event.value as PlayerEvent; if (!state.id || e.id !== state.id || identityProfile !== profileId()) return;
+    const previous = state.event;
     if (state.event && (state.event.duration !== e.duration || e.position < state.event.position || Math.abs(e.position - state.event.position) > Math.max(2000, e.time - state.event.time + 1000))) countdown.reset();
+    if (recoveryUsed) {
+      const elapsed = previous ? e.time - previous.time : 0, advanced = previous ? e.position - previous.position : 0;
+      // Re-arm after healthy playback, never just a pause, seek, or time spent buffering.
+      const progressing = !state.loading && !state.error && !e.error && foreground && previous?.id === e.id
+        && previous.playing && e.playing && !previous.buffering && !e.buffering
+        && elapsed > 0 && elapsed <= 5000 && advanced > 0 && Math.abs(advanced - elapsed) <= 1000;
+      recoveryPlayback = progressing ? recoveryPlayback + Math.min(elapsed, advanced) : 0;
+      if (recoveryPlayback >= 30_000) recoveryUsed = false;
+    }
     set('event', e); attendance.playback(attendance.token, e.playing, foreground);
     if (e.error) { void recover(e); return; }
     if (e.duration > 0 && segmentDuration !== e.duration) { segmentDuration = e.duration; void fetchSegments(request, e.duration); }

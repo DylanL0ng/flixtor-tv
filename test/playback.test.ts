@@ -146,6 +146,50 @@ describe('silent playback recovery', () => {
       expect(f.account).toHaveBeenCalledTimes(2); expect(f.player.state.error).toBeUndefined();
     } finally { f.close(); }
   });
+  it.each([false, true])('recovers later stream expiry after healthy playback (initial refresh: %s)', async initialRefresh => {
+    const resolve = vi.fn().mockResolvedValue(stream);
+    if (initialRefresh) resolve.mockRejectedValueOnce(new ServiceError('SIGNED_OUT'));
+    const f = await fixture(resolve);
+    try {
+      await f.player.start(detail);
+      if (!initialRefresh) {
+        f.emit(f.player.state.id, { error: 'ERROR_CODE_IO_BAD_HTTP_STATUS' });
+        await vi.waitFor(() => expect(f.loads).toHaveLength(2));
+      }
+      const old = f.player.state.id, loads = f.loads.length;
+      for (let second = 0; second <= 30; second++) f.emit(old, {
+        position: 30_000 + second * 1000, time: 1000 + second * 1000, playing: true, playRequested: true,
+      });
+      // A long pause must not prevent fresh credentials being requested on resume.
+      f.emit(old, { position: 60_000, time: 32_000 });
+      f.emit(old, { position: 60_000, time: 32_000 + 16 * 60_000, playRequested: initialRefresh, error: 'ERROR_CODE_IO_BAD_HTTP_STATUS' });
+      await vi.waitFor(() => expect(f.loads).toHaveLength(loads + 1));
+      expect(f.account).toHaveBeenCalledTimes(2);
+      expect(f.loads.at(-1)).toMatchObject({ position: 60_000, play: initialRefresh });
+      expect(f.player.state.error).toBeUndefined();
+      // Retired callbacks and repeated failures cannot immediately renew the budget.
+      f.emit(old, { position: 99_000, time: 2_000_000, playing: true });
+      f.emit(f.player.state.id, { error: 'ERROR_CODE_IO_BAD_HTTP_STATUS' });
+      expect(f.player.state.error).toBe('MEDIA'); expect(f.account).toHaveBeenCalledTimes(2);
+    } finally { f.close(); }
+  });
+  it.each(['pause', 'buffer', 'background', 'seek', 'stall'] as const)('does not re-arm recovery across %s', async interruption => {
+    const resolve = vi.fn().mockRejectedValueOnce(new ServiceError('SIGNED_OUT')).mockResolvedValue(stream);
+    const f = await fixture(resolve);
+    try {
+      await f.player.start(detail); const id = f.player.state.id;
+      for (let second = 0; second < 30; second++) f.emit(id, {
+        position: 30_000 + second * 1000, time: 1000 + second * 1000, playing: true, playRequested: true,
+      });
+      if (interruption === 'background') { f.lifecycle(false); f.lifecycle(true); }
+      const position = interruption === 'seek' ? 90_000 : 60_000;
+      const time = interruption === 'stall' ? 1_000_000 : 31_000;
+      f.emit(id, { position, time, playing: interruption !== 'pause', playRequested: true, buffering: interruption === 'buffer' });
+      f.emit(id, { position: position + 1000, time: time + 1000, playing: true, playRequested: true });
+      f.emit(id, { error: 'ERROR_CODE_IO_BAD_HTTP_STATUS' });
+      expect(f.player.state.error).toBe('MEDIA'); expect(f.account).toHaveBeenCalledTimes(1); expect(f.loads).toHaveLength(1);
+    } finally { f.close(); }
+  });
   it('latches background pause intent even when returning before refresh completes', async () => {
     const f = await fixture(), gate = deferred<string>();
     f.account.mockReturnValueOnce(gate.promise);
